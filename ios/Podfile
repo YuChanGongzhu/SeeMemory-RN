@@ -1,0 +1,79 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+def patch_hermes_cli_path(installer)
+  # PODS_ROOT points to RingMemoryApp/ios/Pods, so node_modules is two levels up.
+  hermes_cli_path = '${PODS_ROOT}/../../node_modules/hermes-compiler/hermesc/osx-bin/hermesc'
+  support_dir = File.join(installer.sandbox.root, 'Target Support Files', 'Pods-RingMemoryApp')
+
+  %w[Pods-RingMemoryApp.debug.xcconfig Pods-RingMemoryApp.release.xcconfig].each do |filename|
+    path = File.join(support_dir, filename)
+    next unless File.exist?(path)
+
+    content = File.read(path)
+    next if content.include?("HERMES_CLI_PATH = #{hermes_cli_path}")
+
+    content = if content.match?(/^HERMES_CLI_PATH = .*$/)
+      content.gsub(/^HERMES_CLI_PATH = .*$/, "HERMES_CLI_PATH = #{hermes_cli_path}")
+    else
+      "#{content}\nHERMES_CLI_PATH = #{hermes_cli_path}\n"
+    end
+
+    File.write(path, content)
+  end
+end
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+use_frameworks! :linkage => :dynamic
+
+target 'RingMemoryApp' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  # BCLRingSDK transitive dependencies. The SDK itself is linked directly from
+  # the app target to match the SeeMemory integration path.
+  pod 'Foil', '~> 5.1.2'
+  pod 'NordicDFU'
+  pod 'RxSwift', '~> 6.9.0'
+  pod 'RxRelay', '~> 6.9.0'
+  pod 'RxCocoa', '~> 6.9.0'
+  pod 'SwiftDate'
+  pod 'SwiftyBeaver', '1.9.5'
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    # Keep the SDK's Swift dependency graph aligned with the binary interface.
+    bcl_deps = %w[Foil NordicDFU RxSwift RxRelay RxCocoa SwiftDate SwiftyBeaver ZIPFoundation]
+    installer.pods_project.targets.each do |target|
+      next unless bcl_deps.include?(target.name)
+
+      target.build_configurations.each do |build_config|
+        build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+        build_config.build_settings['DEFINES_MODULE'] = 'YES'
+        build_config.build_settings.delete('BUILD_LIBRARY_FOR_DISTRIBUTION')
+      end
+    end
+
+  end
+end
+
+post_integrate do |installer|
+  patch_hermes_cli_path(installer)
+end
