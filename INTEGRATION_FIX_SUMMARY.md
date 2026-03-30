@@ -286,6 +286,301 @@ await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
 
 `npx tsc --noEmit` 已通过。
 
+## 10. 修正连接 Promise 重复完成
+
+### 现象
+
+连接设备时出现：
+
+```text
+RTNRingModule.connectDevice(): Tried to resolve a promise more than once.
+```
+
+### 根因
+
+`BCLRingManager.shared.startConnect(...)` 的 `connectResultBlock` 可能不只回调一次，但桥接层把它当作只回调一次的 Promise 来使用。
+
+### 修改
+
+在 [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L109) 中：
+
+- 给 `connectDevice()` 增加 `didSettlePromise`
+- 保证连接 Promise 只在第一次成功或第一次失败时完成一次
+- 后续重复回调只记录事件/日志，不再重复 `resolve/reject`
+
+### 参考
+
+`SeeMemory` 的连接方式是：
+
+- [DeviceTable_VC.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/SeeMemory/BCLRingSDKDemo/Common/ViewControllers/DeviceTable_VC.swift#L120)
+
+即：
+
+```swift
+BCLRingManager.shared.startConnect(
+  uuidString: device.peripheral.identifier.uuidString,
+  isAutoReconnect: true,
+  autoReconnectTimeLimit: 600,
+  autoReconnectMaxAttempts: 20
+) { result in ... }
+```
+
+### 断开连接接口对照
+
+当前 BCLSDK 暴露的是：
+
+- `disconnect()`
+- `disconnect(peripheral:)`
+
+参考：
+
+- [BCLRingSDK.swiftinterface](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/BCLRingSDK.xcframework/ios-arm64/BCLRingSDK.framework/Modules/BCLRingSDK.swiftmodule/arm64-apple-ios.swiftinterface#L839)
+- [BasicConnection_Module.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/SeeMemory/BCLRingSDKDemo/FunctionExamplesModule/FunctionExamples_module/BasicConnection_Module.swift#L52)
+
+## 11. 连接状态与列表展示同步
+
+### 现象
+
+- 手机系统蓝牙已经显示设备已连接
+- App 设备卡片仍显示“未连接”
+- 甚至出现重复设备卡片，一张“已连接”，一张“未连接”
+
+### 根因
+
+存在两类问题：
+
+1. 扫描事件和连接事件里设备 `id` 生成规则不一致
+2. 设备列表只按 `id` 做匹配，导致同一设备可能因为 `macAddress/uuidString/name` 差异被插入两次
+
+### 修改
+
+#### 原生侧
+
+在 [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L119) 中统一连接事件设备 ID 规则：
+
+- 优先 `macAddress`
+- 为空时退回 `uuidString`
+
+并且连接事件显式带上：
+
+- `isConnected: true`
+- `macAddress`
+- `uuidString`
+
+#### TS 类型
+
+在 [NativeRingModule.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/specs/NativeRingModule.ts#L5) 中为 `RingDevice` 增加：
+
+- `macAddress?: string`
+- `uuidString?: string`
+
+#### 前端状态同步
+
+在 [useRingScanner.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useRingScanner.ts#L49) 中：
+
+- 如果扫描结果里设备已经 `isConnected`，同步更新当前连接态
+- 设备列表去重时同时比较：
+  - `id`
+  - `macAddress`
+  - `uuidString`
+- 重复项优先保留信息更完整的设备对象
+
+在 [DevicesScreen.tsx](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/screens/DevicesScreen.tsx#L135) 中：
+
+- 设备卡片连接态优先使用 `item.isConnected`
+- 再回退到 `currentDevice?.id === item.id`
+
+## 12. 录音停止逻辑改为更接近 SeeMemory 的模型
+
+### 现象
+
+曾出现：
+
+- App 显示“已停止”
+- 设备侧实际上仍在继续录音
+- 再次点击“开始录音”报 `Already capturing`
+
+### 根因
+
+桥接层一度把 ADPCM 流当成“反复请求下一帧”的模型处理，容易让：
+
+- App 内部状态
+- SDK 实际流状态
+- 设备真实录音状态
+
+三者脱节。
+
+### SeeMemory 的做法
+
+`SeeMemory` 录音核心模式是：
+
+- 开始时调用一次 `controlADPCMFormatAudio(isOpen: true)`
+- 停止时调用一次 `controlADPCMFormatAudio(isOpen: false)`
+- 持续回调的数据只负责收集
+
+参考：
+
+- [VoiceRecord_VC.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/SeeMemory/BCLRingSDKDemo/Common/ViewControllers/VoiceRecord_VC.swift#L312)
+- [AudioTransmission_Module.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/SeeMemory/BCLRingSDKDemo/FunctionExamplesModule/FunctionExamples_module/AudioTransmission_Module.swift#L221)
+
+### 修改
+
+在 [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L203) 中：
+
+- 录音开始改为“单次打开 ADPCM 流”
+- 停止改为“单次关闭 ADPCM 流”
+- `startCapture/stopCapture` 都增加 Promise 一次性完成保护
+
+## 13. 增加播放接口到 TurboModule 正式 spec
+
+### 现象
+
+前端调用播放时出现：
+
+```text
+Audio playback is unavailable
+```
+
+### 根因
+
+`playAudioFile` / `stopAudioPlayback` 一开始只在原生层导出，但没有写进 TurboModule spec。新架构下 JS 侧拿到的是 codegen 过的接口，所以方法实际上不可见。
+
+### 修改
+
+在 [NativeRingModule.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/specs/NativeRingModule.ts#L53) 中正式加入：
+
+- `playAudioFile(filePath)`
+- `stopAudioPlayback()`
+
+随后同步调整：
+
+- [RingModule.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/native/RingModule.ts)
+- [useAudioCapture.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useAudioCapture.ts)
+- [RingModule.kt](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/android/app/src/main/java/com/ringmemoryapp/rtnringmodule/RingModule.kt)
+
+## 14. 增加播放状态显示与调试信息
+
+### 修改
+
+#### 原生侧
+
+在 [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L291) 中：
+
+- 播放前检查文件是否存在
+- 读取文件大小
+- 记录播放器时长
+- 记录 `didStart`
+- 通过 `onDebugLog` 输出播放调试信息
+
+#### 前端侧
+
+在 [useAudioCapture.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useAudioCapture.ts#L6) 中增加：
+
+- `isPlaying`
+- `currentPlayingPath`
+
+在 [DevicesScreen.tsx](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/screens/DevicesScreen.tsx#L219) 中：
+
+- 当前播放的片段按钮文案显示为“播放中”
+
+## 15. 修正播放音频会话配置错误
+
+### 现象
+
+播放时出现原生错误：
+
+```text
+category option 'defaultToSpeaker' is only applicable with category 'playAndRecord'
+OSStatus error -50
+```
+
+### 根因
+
+原生播放时把：
+
+```swift
+setCategory(.playback, options: [.defaultToSpeaker])
+```
+
+组合在一起使用，但 `defaultToSpeaker` 不适用于 `.playback`。
+
+### 修改
+
+在 [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L305) 中改为：
+
+```swift
+try audioSession.setCategory(.playback, mode: .default)
+```
+
+## 16. 本地录音列表改为直接读取真实文件
+
+### 问题
+
+最初本地录音列表依赖 `AsyncStorage` 持久化的绝对路径。重装 App 后，沙盒路径变化，旧路径会失效，从而导致：
+
+- 列表里有录音
+- 但点击播放报 `Audio file not found`
+
+### 修改
+
+改成由原生层直接枚举当前 App 沙盒里的真实音频目录：
+
+#### iOS
+
+- [RTNRingModule.mm](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.mm#L31)
+- [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L343)
+
+新增：
+
+- `getSavedAudioSegments()`
+
+#### Android
+
+- [RingModule.kt](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/android/app/src/main/java/com/ringmemoryapp/rtnringmodule/RingModule.kt#L262)
+
+#### 前端
+
+- [useAudioCapture.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useAudioCapture.ts#L24)
+
+现在本地录音列表直接来自当前真实文件，而不是历史缓存路径。
+
+### 补充
+
+iOS 保存目录通过 `audioDirectory()` 统一收口：
+
+- [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L432)
+
+Android 保存目录同步从缓存目录改为 `filesDir`：
+
+- [RingModule.kt](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/android/app/src/main/java/com/ringmemoryapp/rtnringmodule/RingModule.kt#L303)
+
+## 17. 录音列表补充显示时长与大小
+
+### 修改
+
+在 [DevicesScreen.tsx](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/screens/DevicesScreen.tsx#L210) 中，录音项增加：
+
+- 时长
+- 文件大小
+
+同时原生片段时长计算改为按 PCM 实际字节数推算，而不是简单用墙钟时间差：
+
+- [RTNRingModule.swift](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/RingMemoryApp/RTNRingModule.swift#L379)
+
+## 18. 新增项目级 `.gitignore`
+
+### 修改
+
+新增并整理 [RingMemoryApp/.gitignore](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/.gitignore)，用于忽略：
+
+- React Native / 原生构建产物
+- 本地 codegen 缓存
+- `jsbundle`
+- `.log`
+- 本地 SDK 备份目录
+
+注意：本次未修改仓库最外层 `.gitignore`。
+
 ## 本次修改文件清单
 
 - [ios/Podfile](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/ios/Podfile)
@@ -297,7 +592,10 @@ await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
 - [src/hooks/useAudioCapture.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useAudioCapture.ts)
 - [src/screens/DevicesScreen.tsx](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/screens/DevicesScreen.tsx)
 - [src/types/index.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/types/index.ts)
+- [src/specs/NativeRingModule.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/specs/NativeRingModule.ts)
 - [src/hooks/useMemoryRecall.ts](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/src/hooks/useMemoryRecall.ts)
+- [android/app/src/main/java/com/ringmemoryapp/rtnringmodule/RingModule.kt](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/android/app/src/main/java/com/ringmemoryapp/rtnringmodule/RingModule.kt)
+- [RingMemoryApp/.gitignore](/Users/ivy/Desktop/program/ChipletRing-APPSDK/RingMemoryApp/.gitignore)
 
 ## 当前状态
 
@@ -307,6 +605,8 @@ await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
 - TypeScript 静态检查通过
 - iOS 原生桥接层已修复扫描 Promise 多次完成问题
 - 前端已具备日志展示和本地录音列表
+- 播放接口已进入 TurboModule 正式 spec
+- 本地录音列表改为直接读取当前真实文件
 
 ### 仍需要你本机验证
 
@@ -321,4 +621,3 @@ await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
    - `startScan()` 是否不再重复报错
    - 停止录音后是否确实停止
    - 录音文件是否能在列表中播放
-
