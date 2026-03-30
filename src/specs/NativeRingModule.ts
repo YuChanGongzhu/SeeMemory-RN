@@ -17,6 +17,8 @@ export interface AudioSegment {
   duration: number;
   timestamp: number;
   size: number;
+  isDenoised?: boolean;
+  sourceFilePath?: string;
 }
 
 export interface AudioPlaybackInfo {
@@ -65,6 +67,7 @@ export interface Spec extends TurboModule {
   stopCapture(): Promise<void>;
   isCapturing(): Promise<boolean>;
   getSavedAudioSegments(): Promise<AudioSegment[]>;
+  denoiseAudioFile(filePath: string): Promise<AudioSegment>;
   playAudioFile(filePath: string): Promise<AudioPlaybackInfo>;
   stopAudioPlayback(): Promise<void>;
 

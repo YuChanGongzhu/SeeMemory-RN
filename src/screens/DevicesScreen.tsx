@@ -1,4 +1,4 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useRingScanner} from '../hooks/useRingScanner';
@@ -48,6 +48,7 @@ export function DevicesScreen() {
     startCaptureADPCM,
     startCapturePCM,
     stopCapture,
+    denoiseSegment,
     playSegment,
     stopPlayback,
     clearSegments,
@@ -87,6 +88,16 @@ export function DevicesScreen() {
       subscriptions.forEach(sub => sub.remove());
     };
   }, []);
+
+  const denoisedBySource = useMemo(() => {
+    const map = new Map<string, string>();
+    segments.forEach(segment => {
+      if (segment.isDenoised && segment.sourceFilePath) {
+        map.set(segment.sourceFilePath, segment.filePath);
+      }
+    });
+    return map;
+  }, [segments]);
 
   const handleScan = async () => {
     if (isScanning) {
@@ -234,8 +245,13 @@ export function DevicesScreen() {
                         <View style={styles.recordingMeta}>
                           <Text style={styles.recordingTitle}>{formatTime(segment.timestamp)}</Text>
                           <Text style={styles.recordingStats}>
-                            时长 {formatDuration(segment.duration)} · 大小 {formatBytes(segment.size)}
+                            {segment.isDenoised ? '降噪文件' : '原始文件'} · 时长 {formatDuration(segment.duration)} · 大小 {formatBytes(segment.size)}
                           </Text>
+                          {!!segment.sourceFilePath && (
+                            <Text style={styles.recordingStats} numberOfLines={1}>
+                              来源: {segment.sourceFilePath}
+                            </Text>
+                          )}
                           <Text style={styles.recordingPath} numberOfLines={1}>
                             {segment.filePath}
                           </Text>
@@ -275,6 +291,32 @@ export function DevicesScreen() {
                           <TouchableOpacity style={styles.secondaryBtn} onPress={stopPlayback}>
                             <Text style={styles.secondaryBtnText}>停止</Text>
                           </TouchableOpacity>
+                          {!segment.isDenoised && (
+                            <TouchableOpacity
+                              style={styles.secondaryBtn}
+                              onPress={() => denoiseSegment(segment.filePath)}>
+                              <Text style={styles.secondaryBtnText}>RNNoise降噪</Text>
+                            </TouchableOpacity>
+                          )}
+                          {!segment.isDenoised && !!denoisedBySource.get(segment.filePath) && (
+                            <TouchableOpacity
+                              style={styles.secondaryBtn}
+                              onPress={() => {
+                                const denoisedPath = denoisedBySource.get(segment.filePath);
+                                if (denoisedPath) {
+                                  playSegment(denoisedPath);
+                                }
+                              }}>
+                              <Text style={styles.secondaryBtnText}>播放降噪</Text>
+                            </TouchableOpacity>
+                          )}
+                          {!!segment.isDenoised && !!segment.sourceFilePath && (
+                            <TouchableOpacity
+                              style={styles.secondaryBtn}
+                              onPress={() => playSegment(segment.sourceFilePath!)}>
+                              <Text style={styles.secondaryBtnText}>播放原始</Text>
+                            </TouchableOpacity>
+                          )}
                         </View>
                       </View>
                     ))}

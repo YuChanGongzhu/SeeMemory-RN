@@ -4,6 +4,11 @@ import AVFoundation
 import React
 import BCLRingSDK
 
+@_silgen_name("RNNoiseDenoisePCM16Mono8k")
+private func RNNoiseDenoisePCM16Mono8k(_ input: UnsafePointer<Int16>?,
+                                       _ sampleCount: Int32,
+                                       _ output: UnsafeMutablePointer<Int16>?) -> Int32
+
 @objc(RTNRingModule)
 class RTNRingModule: RCTEventEmitter {
     private enum CaptureAudioFormat {
@@ -27,6 +32,7 @@ class RTNRingModule: RCTEventEmitter {
     private var pcmLastSeq: Int?
     private var pcmRestartCount = 0
     private var isRestartingPCMStream = false
+    private let denoiseQueue = DispatchQueue(label: "com.ringmemoryapp.rnnoise", qos: .userInitiated)
 
     private let segmentDurationSeconds: TimeInterval = 60
 
@@ -413,11 +419,21 @@ class RTNRingModule: RCTEventEmitter {
                 let size = values.fileSize ?? 0
                 let duration = max(Double(max(size - 44, 0)) / 16000.0, 0)
                 let modifiedAt = Int((values.contentModificationDate ?? Date()).timeIntervalSince1970 * 1000)
+                let fileName = url.lastPathComponent
+                let isDenoised = fileName.hasSuffix("_rnnoise.wav")
+                let sourceFilePath: String? = {
+                    guard isDenoised else { return nil }
+                    let sourceName = fileName.replacingOccurrences(of: "_rnnoise.wav", with: ".wav")
+                    let sourceURL = url.deletingLastPathComponent().appendingPathComponent(sourceName)
+                    return FileManager.default.fileExists(atPath: sourceURL.path) ? sourceURL.path : nil
+                }()
                 return [
                     "filePath": url.path,
                     "duration": duration,
                     "timestamp": modifiedAt,
                     "size": size,
+                    "isDenoised": isDenoised,
+                    "sourceFilePath": sourceFilePath as Any,
                 ]
             }.sorted { lhs, rhs in
                 (lhs["timestamp"] as? Int ?? 0) > (rhs["timestamp"] as? Int ?? 0)
@@ -426,6 +442,34 @@ class RTNRingModule: RCTEventEmitter {
             resolve(items)
         } catch {
             reject("AUDIO_LIST_ERROR", error.localizedDescription, error)
+        }
+    }
+
+    @objc(denoiseAudioFile:resolve:reject:)
+    func denoiseAudioFile(_ filePath: String,
+                          resolve: @escaping RCTPromiseResolveBlock,
+                          reject: @escaping RCTPromiseRejectBlock) {
+        let sourceURL = URL(fileURLWithPath: filePath)
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            reject("AUDIO_DENOISE_ERROR", "Audio file not found", nil)
+            return
+        }
+
+        denoiseQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let segment = try self.createRNNoiseSegment(fromWavPath: sourceURL.path)
+                DispatchQueue.main.async {
+                    if self.hasListeners {
+                        self.sendEvent(withName: "onAudioSegmentReady", body: segment)
+                    }
+                    resolve(segment)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    reject("AUDIO_DENOISE_ERROR", error.localizedDescription, error)
+                }
+            }
         }
     }
 
@@ -462,15 +506,20 @@ class RTNRingModule: RCTEventEmitter {
 
         let outputPath = saveAsWav(pcmData: pcmData)
         let duration = Double(pcmData.count) / 16000.0
+        let segmentTimestamp = Int(captureStartTime * 1000)
         emitDebugLog("\(currentCaptureFormat == .pcm ? "PCM" : "ADPCM")录音片段已保存: \((outputPath as NSString).lastPathComponent)")
         if hasListeners {
             sendEvent(withName: "onAudioSegmentReady", body: [
                 "filePath": outputPath,
                 "duration": max(duration, 0),
-                "timestamp": Int(captureStartTime * 1000),
+                "timestamp": segmentTimestamp,
                 "size": pcmData.count,
+                "isDenoised": false,
+                "sourceFilePath": NSNull(),
             ])
         }
+
+        runAutoRNNoiseDenoise(for: outputPath)
 
         bufferedAudioPackets.removeAll()
     }
@@ -689,6 +738,85 @@ class RTNRingModule: RCTEventEmitter {
         try? wav.write(to: fileURL)
 
         return fileURL.path
+    }
+
+    private func runAutoRNNoiseDenoise(for sourcePath: String) {
+        denoiseQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let denoisedSegment = try self.createRNNoiseSegment(fromWavPath: sourcePath)
+                DispatchQueue.main.async {
+                    self.emitDebugLog("RNNoise降噪完成: \((denoisedSegment["filePath"] as? String ?? "unknown") as NSString)")
+                    if self.hasListeners {
+                        self.sendEvent(withName: "onAudioSegmentReady", body: denoisedSegment)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.emitDebugLog("RNNoise降噪失败: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func createRNNoiseSegment(fromWavPath sourcePath: String) throws -> [String: Any] {
+        let sourceURL = URL(fileURLWithPath: sourcePath)
+        let sourceName = sourceURL.deletingPathExtension().lastPathComponent
+        let denoisedURL = sourceURL.deletingLastPathComponent().appendingPathComponent("\(sourceName)_rnnoise.wav")
+
+        if FileManager.default.fileExists(atPath: denoisedURL.path) {
+            return try buildSegmentDict(fileURL: denoisedURL, sourceFilePath: sourcePath)
+        }
+
+        let wavData = try Data(contentsOf: sourceURL)
+        guard wavData.count > 44 else {
+            throw NSError(domain: "RTNRingModule", code: 3001, userInfo: [NSLocalizedDescriptionKey: "Invalid WAV file"]) 
+        }
+
+        let pcmData = wavData.subdata(in: 44 ..< wavData.count)
+        guard let denoisedPCM = denoisePCMWithRNNoise(pcmData) else {
+            throw NSError(domain: "RTNRingModule", code: 3002, userInfo: [NSLocalizedDescriptionKey: "RNNoise processing failed"]) 
+        }
+
+        var output = createWavHeader(dataSize: denoisedPCM.count)
+        output.append(denoisedPCM)
+        try output.write(to: denoisedURL, options: .atomic)
+
+        return try buildSegmentDict(fileURL: denoisedURL, sourceFilePath: sourcePath)
+    }
+
+    private func denoisePCMWithRNNoise(_ pcmData: Data) -> Data? {
+        guard !pcmData.isEmpty, pcmData.count % 2 == 0 else { return nil }
+        let sampleCount = pcmData.count / MemoryLayout<Int16>.size
+        var denoised = Data(count: pcmData.count)
+
+        let processed = pcmData.withUnsafeBytes { inputBuffer -> Int32 in
+            denoised.withUnsafeMutableBytes { outputBuffer -> Int32 in
+                guard let inputBase = inputBuffer.bindMemory(to: Int16.self).baseAddress,
+                      let outputBase = outputBuffer.bindMemory(to: Int16.self).baseAddress else {
+                    return 0
+                }
+                return RNNoiseDenoisePCM16Mono8k(inputBase, Int32(sampleCount), outputBase)
+            }
+        }
+
+        guard processed == Int32(sampleCount) else { return nil }
+        return denoised
+    }
+
+    private func buildSegmentDict(fileURL: URL, sourceFilePath: String?) throws -> [String: Any] {
+        let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let size = values.fileSize ?? 0
+        let duration = max(Double(max(size - 44, 0)) / 16000.0, 0)
+        let modifiedAt = Int((values.contentModificationDate ?? Date()).timeIntervalSince1970 * 1000)
+        return [
+            "filePath": fileURL.path,
+            "duration": duration,
+            "timestamp": modifiedAt,
+            "size": size,
+            "isDenoised": true,
+            "sourceFilePath": sourceFilePath as Any,
+        ]
     }
 
     private func audioDirectory() -> URL {

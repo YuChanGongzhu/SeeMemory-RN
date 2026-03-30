@@ -13,6 +13,7 @@ export interface UseAudioCaptureReturn {
   startCaptureADPCM: () => Promise<void>;
   startCapturePCM: () => Promise<void>;
   stopCapture: () => Promise<void>;
+  denoiseSegment: (filePath: string) => Promise<AudioSegment | null>;
   playSegment: (filePath: string) => Promise<void>;
   stopPlayback: () => Promise<void>;
   clearSegments: () => void;
@@ -38,7 +39,10 @@ export function useAudioCapture(): UseAudioCaptureReturn {
 
     const subscription = ringEventEmitter.addListener('onAudioSegmentReady', (segment: AudioSegment) => {
       console.log('[AudioCapture] New segment:', segment);
-      setSegments(prev => [segment, ...prev]);
+      setSegments(prev => {
+        const withoutDup = prev.filter(item => item.filePath !== segment.filePath);
+        return [segment, ...withoutDup];
+      });
     });
 
     return () => subscription.remove();
@@ -91,6 +95,20 @@ export function useAudioCapture(): UseAudioCaptureReturn {
     }
   }, []);
 
+  const denoiseSegment = useCallback(async (filePath: string) => {
+    try {
+      const result = await RingModule.denoiseAudioFile(filePath);
+      setSegments(prev => {
+        const withoutDup = prev.filter(item => item.filePath !== result.filePath);
+        return [result, ...withoutDup];
+      });
+      return result;
+    } catch (error) {
+      console.error('[AudioCapture] Failed to denoise audio:', error);
+      return null;
+    }
+  }, []);
+
   const playSegment = useCallback(async (filePath: string) => {
     try {
       const result = await RingModule.playAudioFile(filePath);
@@ -137,6 +155,7 @@ export function useAudioCapture(): UseAudioCaptureReturn {
     startCaptureADPCM,
     startCapturePCM,
     stopCapture,
+    denoiseSegment,
     playSegment,
     stopPlayback,
     clearSegments,

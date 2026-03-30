@@ -39,6 +39,9 @@ const unavailableModule: Spec = {
   },
   isCapturing: async () => false,
   getSavedAudioSegments: async () => [],
+  denoiseAudioFile: async () => {
+    throw unavailableError;
+  },
   playAudioFile: async () => {
     throw unavailableError;
   },
