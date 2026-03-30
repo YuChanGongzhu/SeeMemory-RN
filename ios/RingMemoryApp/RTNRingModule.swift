@@ -21,6 +21,12 @@ class RTNRingModule: RCTEventEmitter {
     private var pendingCaptureRetry: DispatchWorkItem?
     private var audioPlayer: AVAudioPlayer?
     private var currentCaptureFormat: CaptureAudioFormat = .adpcm
+    private var capturePacketOrder = 0
+    private var pcmWarmupDeadline: TimeInterval = 0
+    private var pcmCaptureStartTime: TimeInterval = 0
+    private var pcmLastSeq: Int?
+    private var pcmRestartCount = 0
+    private var isRestartingPCMStream = false
 
     private let segmentDurationSeconds: TimeInterval = 60
 
@@ -240,6 +246,12 @@ class RTNRingModule: RCTEventEmitter {
         pendingCaptureRetry?.cancel()
         pendingCaptureRetry = nil
         currentCaptureFormat = format
+        capturePacketOrder = 0
+        pcmWarmupDeadline = format == .pcm ? Date().timeIntervalSince1970 + 0.35 : 0
+        pcmCaptureStartTime = format == .pcm ? Date().timeIntervalSince1970 : 0
+        pcmLastSeq = nil
+        pcmRestartCount = 0
+        isRestartingPCMStream = false
         let sessionID = captureSessionID
         var didSettlePromise = false
         emitDebugLog("开始\(format == .pcm ? "PCM" : "ADPCM")录音")
@@ -259,13 +271,14 @@ class RTNRingModule: RCTEventEmitter {
                         }
                         self.handleIncomingPacket(seq: response.seq, audioData: response.audioData)
                     case let .failure(error):
-                        self.isCapturingAudio = false
-                        self.emitDebugLog("录音启动失败: \(error.localizedDescription)")
                         if !didSettlePromise {
+                            self.isCapturingAudio = false
+                            self.emitDebugLog("录音启动失败: \(error.localizedDescription)")
                             didSettlePromise = true
                             reject("CAPTURE_ERROR", error.localizedDescription, error)
-                        } else if self.hasListeners {
-                            self.sendEvent(withName: "onError", body: "Audio stream failed: \(error.localizedDescription)")
+                        } else {
+                            self.emitDebugLog("\(format == .pcm ? "PCM" : "ADPCM")音频流中断，准备重试: \(error.localizedDescription)")
+                            self.scheduleCaptureRetry(format: format, sessionID: sessionID, reason: error.localizedDescription)
                         }
                     }
                 }
@@ -490,7 +503,7 @@ class RTNRingModule: RCTEventEmitter {
 
     private func openCaptureStream(format: CaptureAudioFormat,
                                    sessionID: Int,
-                                   onPacket: @escaping (Result<(seq: Int, audioData: [Int]), BCLError>) -> Void) {
+                                   onPacket: @escaping (Result<(seq: Int?, audioData: [Int]), BCLError>) -> Void) {
         switch format {
         case .adpcm:
             BCLRingManager.shared.controlADPCMFormatAudio(isOpen: true) { [weak self] result in
@@ -509,7 +522,7 @@ class RTNRingModule: RCTEventEmitter {
                 guard self.isCapturingAudio, sessionID == self.captureSessionID else { return }
                 switch result {
                 case let .success(response):
-                    onPacket(.success((seq: response.seq ?? Int(Date().timeIntervalSince1970 * 1000), audioData: response.audioData)))
+                    onPacket(.success((seq: response.seq, audioData: response.audioData)))
                 case let .failure(error):
                     onPacket(.failure(error))
                 }
@@ -517,10 +530,37 @@ class RTNRingModule: RCTEventEmitter {
         }
     }
 
-    private func handleIncomingPacket(seq: Int, audioData: [Int]) {
+    private func handleIncomingPacket(seq: Int?, audioData: [Int]) {
+        if currentCaptureFormat == .pcm, Date().timeIntervalSince1970 < pcmWarmupDeadline {
+            // PCM startup packets can be unstable right after switching push format.
+            return
+        }
+
+        if currentCaptureFormat == .pcm,
+           let rawSeq = seq,
+           shouldRestartPCMStream(for: rawSeq) {
+            restartPCMStream()
+            return
+        }
+
+        let packetSeq: Int
+        if currentCaptureFormat == .pcm {
+            capturePacketOrder += 1
+            packetSeq = capturePacketOrder
+        } else if let seq, seq > 0 {
+            packetSeq = seq
+        } else {
+            capturePacketOrder += 1
+            packetSeq = capturePacketOrder
+        }
+
+        if currentCaptureFormat == .pcm {
+            pcmLastSeq = packetSeq
+        }
+
         let packetData = makeAudioPacketData(from: audioData)
         if !packetData.isEmpty {
-            bufferedAudioPackets.append((seq: seq, data: packetData))
+            bufferedAudioPackets.append((seq: packetSeq, data: packetData))
         }
 
         let elapsed = Date().timeIntervalSince1970 - captureStartTime
@@ -528,6 +568,111 @@ class RTNRingModule: RCTEventEmitter {
             flushCurrentAudioSegment()
             captureStartTime = Date().timeIntervalSince1970
         }
+    }
+
+    private func shouldRestartPCMStream(for rawSeq: Int) -> Bool {
+        guard !isRestartingPCMStream else { return false }
+        guard pcmRestartCount < 2 else { return false }
+        guard pcmCaptureStartTime > 0 else { return false }
+
+        let elapsed = Date().timeIntervalSince1970 - pcmCaptureStartTime
+        guard elapsed > 1.0, elapsed < 12.0 else { return false }
+
+        if let last = pcmLastSeq {
+            // Align with SeeMemory's workaround: if stream still restarts from seq=1 after startup, re-open once.
+            if rawSeq == 1, last > 1 {
+                return true
+            }
+            // Another startup instability pattern: sequence jumps backward significantly.
+            if rawSeq + 20 < last {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func restartPCMStream() {
+        guard isCapturingAudio, currentCaptureFormat == .pcm else { return }
+        guard !isRestartingPCMStream else { return }
+        let sessionID = captureSessionID
+        isRestartingPCMStream = true
+        pcmRestartCount += 1
+        pcmLastSeq = nil
+        pcmWarmupDeadline = Date().timeIntervalSince1970 + 0.35
+        pcmCaptureStartTime = Date().timeIntervalSince1970
+        emitDebugLog("PCM流检测到启动期异常，正在重启（第\(pcmRestartCount)次）")
+
+        BCLRingManager.shared.controlPCMFormatAudio(isOpen: false) { [weak self] _ in
+            guard let self else { return }
+            guard self.isCapturingAudio, self.currentCaptureFormat == .pcm, sessionID == self.captureSessionID else {
+                self.isRestartingPCMStream = false
+                return
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard self.isCapturingAudio, self.currentCaptureFormat == .pcm, sessionID == self.captureSessionID else {
+                    self.isRestartingPCMStream = false
+                    return
+                }
+
+                BCLRingManager.shared.setActivePushAudioInfo(audioType: .pcm) { [weak self] configResult in
+                    guard let self else { return }
+                    guard self.isCapturingAudio, self.currentCaptureFormat == .pcm, sessionID == self.captureSessionID else {
+                        self.isRestartingPCMStream = false
+                        return
+                    }
+
+                    switch configResult {
+                    case .success:
+                        self.openCaptureStream(format: .pcm, sessionID: sessionID) { result in
+                            switch result {
+                            case let .success(response):
+                                self.handleIncomingPacket(seq: response.seq, audioData: response.audioData)
+                            case let .failure(error):
+                                self.emitDebugLog("PCM流重启后仍失败，准备继续重试: \(error.localizedDescription)")
+                                self.scheduleCaptureRetry(format: .pcm, sessionID: sessionID, reason: error.localizedDescription)
+                            }
+                        }
+                    case let .failure(error):
+                        self.emitDebugLog("PCM重配失败，准备继续重试: \(error.localizedDescription)")
+                        self.scheduleCaptureRetry(format: .pcm, sessionID: sessionID, reason: error.localizedDescription)
+                    }
+                    self.isRestartingPCMStream = false
+                }
+            }
+        }
+    }
+
+    private func scheduleCaptureRetry(format: CaptureAudioFormat, sessionID: Int, reason: String) {
+        guard isCapturingAudio, sessionID == captureSessionID else { return }
+        pendingCaptureRetry?.cancel()
+
+        let retryWork = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.isCapturingAudio, sessionID == self.captureSessionID else { return }
+
+            if format == .pcm {
+                self.emitDebugLog("PCM流软重连中: \(reason)")
+                self.restartPCMStream()
+                return
+            }
+
+            self.emitDebugLog("ADPCM流软重连中: \(reason)")
+            self.openCaptureStream(format: format, sessionID: sessionID) { result in
+                switch result {
+                case let .success(response):
+                    self.handleIncomingPacket(seq: response.seq, audioData: response.audioData)
+                case let .failure(error):
+                    if self.hasListeners {
+                        self.sendEvent(withName: "onError", body: "Audio stream failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+
+        pendingCaptureRetry = retryWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: retryWork)
     }
 
     private func saveAsWav(pcmData: Data) -> String {

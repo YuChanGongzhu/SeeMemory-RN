@@ -6,6 +6,8 @@ export interface UseAudioCaptureReturn {
   isCapturing: boolean;
   captureMode: CaptureMode;
   isPlaying: boolean;
+  playbackCurrentTime: number;
+  playbackDuration: number;
   currentPlayingPath: string | null;
   segments: AudioSegment[];
   startCaptureADPCM: () => Promise<void>;
@@ -20,6 +22,8 @@ export function useAudioCapture(): UseAudioCaptureReturn {
   const [isCapturing, setIsCapturing] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>('adpcm');
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
   const [currentPlayingPath, setCurrentPlayingPath] = useState<string | null>(null);
   const [segments, setSegments] = useState<AudioSegment[]>([]);
 
@@ -39,6 +43,24 @@ export function useAudioCapture(): UseAudioCaptureReturn {
 
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (!isPlaying || playbackDuration <= 0) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setPlaybackCurrentTime(prev => {
+        const next = Math.min(prev + 0.25, playbackDuration);
+        if (next >= playbackDuration) {
+          setIsPlaying(false);
+          setCurrentPlayingPath(null);
+        }
+        return next;
+      });
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, [isPlaying, playbackDuration]);
 
   const startCaptureADPCM = useCallback(async () => {
     try {
@@ -75,11 +97,15 @@ export function useAudioCapture(): UseAudioCaptureReturn {
       if (result?.started === false) {
         throw new Error('Audio player did not start');
       }
+      setPlaybackCurrentTime(0);
+      setPlaybackDuration(result?.duration ?? 0);
       setIsPlaying(true);
       setCurrentPlayingPath(filePath);
     } catch (error) {
       setIsPlaying(false);
       setCurrentPlayingPath(null);
+      setPlaybackCurrentTime(0);
+      setPlaybackDuration(0);
       console.error('[AudioCapture] Failed to play audio:', error);
     }
   }, []);
@@ -89,6 +115,8 @@ export function useAudioCapture(): UseAudioCaptureReturn {
       await RingModule.stopAudioPlayback();
       setIsPlaying(false);
       setCurrentPlayingPath(null);
+      setPlaybackCurrentTime(0);
+      setPlaybackDuration(0);
     } catch (error) {
       console.error('[AudioCapture] Failed to stop playback:', error);
     }
@@ -102,6 +130,8 @@ export function useAudioCapture(): UseAudioCaptureReturn {
     isCapturing,
     captureMode,
     isPlaying,
+    playbackCurrentTime,
+    playbackDuration,
     currentPlayingPath,
     segments,
     startCaptureADPCM,

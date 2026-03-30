@@ -41,6 +41,8 @@ export function DevicesScreen() {
     isCapturing,
     captureMode,
     isPlaying,
+    playbackCurrentTime,
+    playbackDuration,
     currentPlayingPath,
     segments,
     startCaptureADPCM,
@@ -238,6 +240,32 @@ export function DevicesScreen() {
                             {segment.filePath}
                           </Text>
                         </View>
+                        {isPlaying && currentPlayingPath === segment.filePath && (
+                          <View style={styles.playbackProgressSection}>
+                            <View style={styles.playbackProgressTrack}>
+                              <View
+                                style={[
+                                  styles.playbackProgressFill,
+                                  {
+                                    width: `${
+                                      playbackDuration > 0
+                                        ? Math.min((playbackCurrentTime / playbackDuration) * 100, 100)
+                                        : 0
+                                    }%`,
+                                  },
+                                ]}
+                              />
+                            </View>
+                            <View style={styles.playbackTimeRow}>
+                              <Text style={styles.playbackTimeText}>
+                                当前 {formatDuration(playbackCurrentTime)}
+                              </Text>
+                              <Text style={styles.playbackTimeText}>
+                                总时长 {formatDuration(playbackDuration || segment.duration)}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
                         <View style={styles.recordingActions}>
                           <TouchableOpacity style={styles.secondaryBtn} onPress={() => playSegment(segment.filePath)}>
                             <Text style={styles.secondaryBtnText}>
@@ -446,6 +474,28 @@ const styles = StyleSheet.create({
   },
   recordingPath: {
     color: '#7E7E7E',
+    fontSize: 11,
+  },
+  playbackProgressSection: {
+    marginBottom: 10,
+  },
+  playbackProgressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#2A2A2A',
+    overflow: 'hidden',
+  },
+  playbackProgressFill: {
+    height: '100%',
+    backgroundColor: '#00D4AA',
+  },
+  playbackTimeRow: {
+    marginTop: 6,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  playbackTimeText: {
+    color: '#9D9D9D',
     fontSize: 11,
   },
   recordingActions: {
