@@ -26,6 +26,7 @@ RCT_EXTERN_METHOD(disconnectDevice:(RCTPromiseResolveBlock)resolve reject:(RCTPr
 RCT_EXTERN_METHOD(getDeviceStatus:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(startCapture:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(startCapturePCM:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(stopCapture:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(isCapturing:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(getSavedAudioSegments:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)

@@ -25,6 +25,8 @@ export interface AudioPlaybackInfo {
   started?: boolean;
 }
 
+export type CaptureMode = 'adpcm' | 'pcm';
+
 export interface BCLBindRingResponse {
   success: boolean;
   message: string;
@@ -59,6 +61,7 @@ export interface Spec extends TurboModule {
 
   // ===== 录音控制 =====
   startCapture(): Promise<void>;
+  startCapturePCM(): Promise<void>;
   stopCapture(): Promise<void>;
   isCapturing(): Promise<boolean>;
   getSavedAudioSegments(): Promise<AudioSegment[]>;

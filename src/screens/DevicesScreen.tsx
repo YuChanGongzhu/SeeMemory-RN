@@ -39,10 +39,12 @@ export function DevicesScreen() {
 
   const {
     isCapturing,
+    captureMode,
     isPlaying,
     currentPlayingPath,
     segments,
-    startCapture,
+    startCaptureADPCM,
+    startCapturePCM,
     stopCapture,
     playSegment,
     stopPlayback,
@@ -176,19 +178,39 @@ export function DevicesScreen() {
                 <Text style={styles.sectionTitle}>录音控制</Text>
                 <View style={styles.captureInfo}>
                   <Text style={styles.captureStatus}>
-                    {isCapturing ? '录音中' : '已暂停'}
+                    {isCapturing ? `录音中（${captureMode.toUpperCase()}）` : '已暂停'}
                   </Text>
                   <Text style={styles.segmentCount}>
                     已录制: {segments.length} 个片段
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={[styles.captureBtn, isCapturing && styles.captureBtnActive]}
-                  onPress={isCapturing ? stopCapture : startCapture}>
-                  <Text style={[styles.captureBtnText, isCapturing && styles.captureBtnTextActive]}>
-                    {isCapturing ? '停止录音' : '开始录音'}
-                  </Text>
-                </TouchableOpacity>
+
+                {isCapturing ? (
+                  <TouchableOpacity
+                    style={[styles.captureBtn, styles.captureBtnActive]}
+                    onPress={stopCapture}>
+                    <Text style={[styles.captureBtnText, styles.captureBtnTextActive]}>
+                      停止录音
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.captureModesRow}>
+                    <TouchableOpacity
+                      style={[styles.captureBtn, styles.captureModeBtn]}
+                      onPress={startCaptureADPCM}>
+                      <Text style={styles.captureBtnText}>
+                        开始 ADPCM 录音
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.captureBtn, styles.captureModeBtn, styles.captureModeBtnPCM]}
+                      onPress={startCapturePCM}>
+                      <Text style={[styles.captureBtnText, styles.captureBtnTextDark]}>
+                        开始 PCM 录音
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 <View style={styles.sectionHeaderRow}>
                   <Text style={styles.sectionSubtitle}>本地录音</Text>
@@ -350,6 +372,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 4,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  captureModesRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  captureModeBtn: {
+    flex: 1,
+  },
+  captureModeBtnPCM: {
+    backgroundColor: '#00D4AA',
   },
   captureBtnActive: {
     backgroundColor: '#00D4AA',
@@ -360,6 +393,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   captureBtnTextActive: {
+    color: '#0D0D0D',
+  },
+  captureBtnTextDark: {
     color: '#0D0D0D',
   },
   sectionHeaderRow: {

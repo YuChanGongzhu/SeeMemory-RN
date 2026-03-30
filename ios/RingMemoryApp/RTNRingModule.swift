@@ -6,6 +6,11 @@ import BCLRingSDK
 
 @objc(RTNRingModule)
 class RTNRingModule: RCTEventEmitter {
+    private enum CaptureAudioFormat {
+        case adpcm
+        case pcm
+    }
+
     private var hasListeners = false
     private var isScanning = false
     private var isCapturingAudio = false
@@ -15,6 +20,7 @@ class RTNRingModule: RCTEventEmitter {
     private var captureSessionID = 0
     private var pendingCaptureRetry: DispatchWorkItem?
     private var audioPlayer: AVAudioPlayer?
+    private var currentCaptureFormat: CaptureAudioFormat = .adpcm
 
     private let segmentDurationSeconds: TimeInterval = 60
 
@@ -205,12 +211,25 @@ class RTNRingModule: RCTEventEmitter {
     @objc(startCapture:reject:)
     func startCapture(_ resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {
+        startCapture(format: .adpcm, resolve: resolve, reject: reject)
+    }
+
+    @objc(startCapturePCM:reject:)
+    func startCapturePCM(_ resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+        startCapture(format: .pcm, resolve: resolve, reject: reject)
+    }
+
+    private func startCapture(format: CaptureAudioFormat,
+                              resolve: @escaping RCTPromiseResolveBlock,
+                              reject: @escaping RCTPromiseRejectBlock) {
         guard !isCapturingAudio else {
             reject("CAPTURE_ERROR", "Already capturing", nil)
             return
         }
-        guard BCLRingManager.shared.currentConnectedDevice != nil else {
-            reject("CAPTURE_ERROR", "Device not connected", nil)
+        let hasConnectedDevice = BCLRingManager.shared.currentConnectedDevice != nil || connectedDeviceId != nil
+        guard hasConnectedDevice else {
+            reject("CAPTURE_ERROR", "Device not connected. Please connect the ring first.", nil)
             return
         }
 
@@ -220,41 +239,40 @@ class RTNRingModule: RCTEventEmitter {
         bufferedAudioPackets.removeAll()
         pendingCaptureRetry?.cancel()
         pendingCaptureRetry = nil
+        currentCaptureFormat = format
         let sessionID = captureSessionID
         var didSettlePromise = false
-        emitDebugLog("开始录音")
-
-        BCLRingManager.shared.controlADPCMFormatAudio(isOpen: true) { [weak self] result in
+        emitDebugLog("开始\(format == .pcm ? "PCM" : "ADPCM")录音")
+        let audioType: BCLAudioType = format == .pcm ? .pcm : .adpcm
+        BCLRingManager.shared.setActivePushAudioInfo(audioType: audioType) { [weak self] configResult in
             guard let self else { return }
             guard self.isCapturingAudio, sessionID == self.captureSessionID else { return }
 
-            switch result {
-            case let .success(response):
-                if !didSettlePromise {
-                    didSettlePromise = true
-                    resolve(nil)
-                }
-
-                let packetData = self.makeAudioPacketData(from: response.audioData)
-
-                if !packetData.isEmpty {
-                    self.bufferedAudioPackets.append((seq: response.seq, data: packetData))
-                }
-
-                let elapsed = Date().timeIntervalSince1970 - self.captureStartTime
-                if elapsed >= self.segmentDurationSeconds {
-                    self.flushCurrentAudioSegment()
-                    self.captureStartTime = Date().timeIntervalSince1970
+            switch configResult {
+            case .success:
+                self.openCaptureStream(format: format, sessionID: sessionID) { appendResult in
+                    switch appendResult {
+                    case let .success(response):
+                        if !didSettlePromise {
+                            didSettlePromise = true
+                            resolve(nil)
+                        }
+                        self.handleIncomingPacket(seq: response.seq, audioData: response.audioData)
+                    case let .failure(error):
+                        self.isCapturingAudio = false
+                        self.emitDebugLog("录音启动失败: \(error.localizedDescription)")
+                        if !didSettlePromise {
+                            didSettlePromise = true
+                            reject("CAPTURE_ERROR", error.localizedDescription, error)
+                        } else if self.hasListeners {
+                            self.sendEvent(withName: "onError", body: "Audio stream failed: \(error.localizedDescription)")
+                        }
+                    }
                 }
             case let .failure(error):
                 self.isCapturingAudio = false
-                self.emitDebugLog("录音启动失败: \(error.localizedDescription)")
-                if !didSettlePromise {
-                    didSettlePromise = true
-                    reject("CAPTURE_ERROR", error.localizedDescription, error)
-                } else if self.hasListeners {
-                    self.sendEvent(withName: "onError", body: "Audio stream failed: \(error.localizedDescription)")
-                }
+                self.emitDebugLog("设置音频格式失败: \(error.localizedDescription)")
+                reject("CAPTURE_ERROR", "Set active push audio format failed: \(error.localizedDescription)", error)
             }
         }
     }
@@ -267,12 +285,13 @@ class RTNRingModule: RCTEventEmitter {
         pendingCaptureRetry?.cancel()
         pendingCaptureRetry = nil
         var didSettlePromise = false
-        emitDebugLog("停止录音")
-        BCLRingManager.shared.controlADPCMFormatAudio(isOpen: false) { [weak self] result in
+        let format = currentCaptureFormat
+        emitDebugLog("停止\(format == .pcm ? "PCM" : "ADPCM")录音")
+        let completion: (Result<Void, BCLError>) -> Void = { [weak self] result in
             guard let self else { return }
             switch result {
             case .success:
-                self.emitDebugLog("已停止ADPCM格式音频传输")
+                self.emitDebugLog("已停止\(format == .pcm ? "PCM" : "ADPCM")音频传输")
                 self.flushCurrentAudioSegment()
                 if !didSettlePromise {
                     didSettlePromise = true
@@ -283,6 +302,26 @@ class RTNRingModule: RCTEventEmitter {
                 if !didSettlePromise {
                     didSettlePromise = true
                     reject("CAPTURE_ERROR", error.localizedDescription, error)
+                }
+            }
+        }
+
+        if format == .pcm {
+            BCLRingManager.shared.controlPCMFormatAudio(isOpen: false) { result in
+                switch result {
+                case .success:
+                    completion(.success(()))
+                case let .failure(error):
+                    completion(.failure(error))
+                }
+            }
+        } else {
+            BCLRingManager.shared.controlADPCMFormatAudio(isOpen: false) { result in
+                switch result {
+                case .success:
+                    completion(.success(()))
+                case let .failure(error):
+                    completion(.failure(error))
                 }
             }
         }
@@ -402,20 +441,15 @@ class RTNRingModule: RCTEventEmitter {
         guard !bufferedAudioPackets.isEmpty else { return }
 
         let sorted = bufferedAudioPackets.sorted { $0.seq < $1.seq }
-        var combinedAdpcm = Data()
-        sorted.forEach { combinedAdpcm.append($0.data) }
-
-        guard let pcmData = BCLRingManager.shared.convertAdpcmToPcm(adpcmData: combinedAdpcm), !pcmData.isEmpty else {
-            if hasListeners {
-                sendEvent(withName: "onError", body: "Failed to convert ADPCM to PCM")
-            }
+        let pcmData = makePCMData(from: sorted)
+        guard !pcmData.isEmpty else {
             bufferedAudioPackets.removeAll()
             return
         }
 
         let outputPath = saveAsWav(pcmData: pcmData)
         let duration = Double(pcmData.count) / 16000.0
-        emitDebugLog("录音片段已保存: \((outputPath as NSString).lastPathComponent)")
+        emitDebugLog("\(currentCaptureFormat == .pcm ? "PCM" : "ADPCM")录音片段已保存: \((outputPath as NSString).lastPathComponent)")
         if hasListeners {
             sendEvent(withName: "onAudioSegmentReady", body: [
                 "filePath": outputPath,
@@ -426,6 +460,74 @@ class RTNRingModule: RCTEventEmitter {
         }
 
         bufferedAudioPackets.removeAll()
+    }
+
+    /// Align with SeeMemory processing: decode packet-by-packet to avoid noisy output caused by frame boundary/state issues.
+    private func makePCMData(from packets: [(seq: Int, data: Data)]) -> Data {
+        if currentCaptureFormat == .pcm {
+            var processedPCMData = Data()
+            for packet in packets {
+                if let converted = BCLRingManager.shared.convertAdpcmToPcm(adpcmData: packet.data), !converted.isEmpty {
+                    processedPCMData.append(converted)
+                }
+            }
+            if processedPCMData.isEmpty, hasListeners {
+                sendEvent(withName: "onError", body: "Failed to decode PCM stream packets")
+            }
+            return processedPCMData
+        }
+
+        var combinedAdpcm = Data()
+        packets.forEach { combinedAdpcm.append($0.data) }
+        guard let pcmData = BCLRingManager.shared.convertAdpcmToPcm(adpcmData: combinedAdpcm), !pcmData.isEmpty else {
+            if hasListeners {
+                sendEvent(withName: "onError", body: "Failed to convert ADPCM to PCM")
+            }
+            return Data()
+        }
+        return pcmData
+    }
+
+    private func openCaptureStream(format: CaptureAudioFormat,
+                                   sessionID: Int,
+                                   onPacket: @escaping (Result<(seq: Int, audioData: [Int]), BCLError>) -> Void) {
+        switch format {
+        case .adpcm:
+            BCLRingManager.shared.controlADPCMFormatAudio(isOpen: true) { [weak self] result in
+                guard let self else { return }
+                guard self.isCapturingAudio, sessionID == self.captureSessionID else { return }
+                switch result {
+                case let .success(response):
+                    onPacket(.success((seq: response.seq, audioData: response.audioData)))
+                case let .failure(error):
+                    onPacket(.failure(error))
+                }
+            }
+        case .pcm:
+            BCLRingManager.shared.controlPCMFormatAudio(isOpen: true) { [weak self] result in
+                guard let self else { return }
+                guard self.isCapturingAudio, sessionID == self.captureSessionID else { return }
+                switch result {
+                case let .success(response):
+                    onPacket(.success((seq: response.seq ?? Int(Date().timeIntervalSince1970 * 1000), audioData: response.audioData)))
+                case let .failure(error):
+                    onPacket(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func handleIncomingPacket(seq: Int, audioData: [Int]) {
+        let packetData = makeAudioPacketData(from: audioData)
+        if !packetData.isEmpty {
+            bufferedAudioPackets.append((seq: seq, data: packetData))
+        }
+
+        let elapsed = Date().timeIntervalSince1970 - captureStartTime
+        if elapsed >= segmentDurationSeconds {
+            flushCurrentAudioSegment()
+            captureStartTime = Date().timeIntervalSince1970
+        }
     }
 
     private func saveAsWav(pcmData: Data) -> String {

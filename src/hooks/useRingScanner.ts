@@ -54,12 +54,6 @@ export function useRingScanner(): UseRingScannerReturn {
         if (!list.length) {
           return;
         }
-        const connected = list.find(device => device.isConnected);
-        if (connected) {
-          setIsConnected(true);
-          setCurrentDevice(connected);
-          setStatus('connected');
-        }
         setDevices(prev => {
           const next = [...prev];
           const findMatchIndex = (device: RingDevice) =>

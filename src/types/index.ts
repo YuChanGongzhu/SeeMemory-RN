@@ -1,6 +1,6 @@
-import type {RingDevice, AudioSegment, DeviceStatus} from '../specs/NativeRingModule';
+import type {RingDevice, AudioSegment, DeviceStatus, CaptureMode} from '../specs/NativeRingModule';
 
-export type {RingDevice, AudioSegment, DeviceStatus};
+export type {RingDevice, AudioSegment, DeviceStatus, CaptureMode};
 
 // 事件类型
 export type RingEventType =

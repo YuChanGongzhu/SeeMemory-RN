@@ -31,6 +31,9 @@ const unavailableModule: Spec = {
   startCapture: async () => {
     throw unavailableError;
   },
+  startCapturePCM: async () => {
+    throw unavailableError;
+  },
   stopCapture: async () => {
     throw unavailableError;
   },

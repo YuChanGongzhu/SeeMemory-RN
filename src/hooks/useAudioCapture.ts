@@ -1,13 +1,15 @@
 import {useEffect, useState, useCallback} from 'react';
-import type {AudioSegment} from '../types';
+import type {AudioSegment, CaptureMode} from '../types';
 import {RingModule, ringEventEmitter} from '../native/RingModule';
 
 export interface UseAudioCaptureReturn {
   isCapturing: boolean;
+  captureMode: CaptureMode;
   isPlaying: boolean;
   currentPlayingPath: string | null;
   segments: AudioSegment[];
-  startCapture: () => Promise<void>;
+  startCaptureADPCM: () => Promise<void>;
+  startCapturePCM: () => Promise<void>;
   stopCapture: () => Promise<void>;
   playSegment: (filePath: string) => Promise<void>;
   stopPlayback: () => Promise<void>;
@@ -16,6 +18,7 @@ export interface UseAudioCaptureReturn {
 
 export function useAudioCapture(): UseAudioCaptureReturn {
   const [isCapturing, setIsCapturing] = useState(false);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>('adpcm');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentPlayingPath, setCurrentPlayingPath] = useState<string | null>(null);
   const [segments, setSegments] = useState<AudioSegment[]>([]);
@@ -37,12 +40,23 @@ export function useAudioCapture(): UseAudioCaptureReturn {
     return () => subscription.remove();
   }, []);
 
-  const startCapture = useCallback(async () => {
+  const startCaptureADPCM = useCallback(async () => {
     try {
       await RingModule.startCapture();
+      setCaptureMode('adpcm');
       setIsCapturing(true);
     } catch (error) {
-      console.error('[AudioCapture] Failed to start:', error);
+      console.error('[AudioCapture] Failed to start ADPCM:', error);
+    }
+  }, []);
+
+  const startCapturePCM = useCallback(async () => {
+    try {
+      await RingModule.startCapturePCM();
+      setCaptureMode('pcm');
+      setIsCapturing(true);
+    } catch (error) {
+      console.error('[AudioCapture] Failed to start PCM:', error);
     }
   }, []);
 
@@ -86,10 +100,12 @@ export function useAudioCapture(): UseAudioCaptureReturn {
 
   return {
     isCapturing,
+    captureMode,
     isPlaying,
     currentPlayingPath,
     segments,
-    startCapture,
+    startCaptureADPCM,
+    startCapturePCM,
     stopCapture,
     playSegment,
     stopPlayback,
