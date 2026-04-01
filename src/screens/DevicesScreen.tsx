@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert} from 'react-native';
+import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Platform, Share} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useRingScanner} from '../hooks/useRingScanner';
 import {useAudioCapture} from '../hooks/useAudioCapture';
@@ -147,6 +147,21 @@ export function DevicesScreen() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const shareSegment = async (filePath: string) => {
+    try {
+      const fileUrl = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+      const payload =
+        Platform.OS === 'android'
+          ? {title: '分享录音', message: `录音文件: ${fileUrl}`}
+          : {title: '分享录音', url: fileUrl};
+
+      await Share.share(payload);
+    } catch (error) {
+      console.error('[DevicesScreen] Failed to share audio file:', error);
+      Alert.alert('分享失败', '无法分享该录音文件，请稍后重试');
+    }
+  };
+
   const renderDevice = ({item}: {item: RingDevice}) => (
     <DeviceCard
       device={item}
@@ -290,6 +305,9 @@ export function DevicesScreen() {
                           </TouchableOpacity>
                           <TouchableOpacity style={styles.secondaryBtn} onPress={stopPlayback}>
                             <Text style={styles.secondaryBtnText}>停止</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.secondaryBtn} onPress={() => shareSegment(segment.filePath)}>
+                            <Text style={styles.secondaryBtnText}>分享</Text>
                           </TouchableOpacity>
                           {!segment.isDenoised && (
                             <TouchableOpacity
