@@ -1,5 +1,5 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Platform, Share} from 'react-native';
+import React, {useEffect, useMemo, useState} from 'react';
+import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Platform, Share, Linking} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useRingScanner} from '../hooks/useRingScanner';
 import {useAudioCapture} from '../hooks/useAudioCapture';
@@ -11,7 +11,18 @@ import {isRingModuleAvailable, ringEventEmitter} from '../native/RingModule';
 export function DevicesScreen() {
   const insets = useSafeAreaInsets();
   const [logs, setLogs] = useState<RingDebugLog[]>([]);
-  const hasHydratedSegments = useRef(false);
+  const [uploadingPath, setUploadingPath] = useState<string | null>(null);
+  const [uploadedDebugMap, setUploadedDebugMap] = useState<
+    Record<
+      string,
+      {
+        status: number;
+        message: string;
+        objectUrl?: string;
+        presignedUrl?: string;
+      }
+    >
+  >({});
 
   if (!isRingModuleAvailable) {
     return (
@@ -54,18 +65,6 @@ export function DevicesScreen() {
     clearSegments,
   } = useAudioCapture();
   const {uploadSegment} = useMemoryRecall();
-
-  useEffect(() => {
-    const latest = segments[segments.length - 1];
-    if (!latest) {
-      return;
-    }
-    if (!hasHydratedSegments.current) {
-      hasHydratedSegments.current = true;
-      return;
-    }
-    uploadSegment(latest);
-  }, [segments, uploadSegment]);
 
   useEffect(() => {
     requestPermissions();
@@ -159,6 +158,56 @@ export function DevicesScreen() {
     } catch (error) {
       console.error('[DevicesScreen] Failed to share audio file:', error);
       Alert.alert('分享失败', '无法分享该录音文件，请稍后重试');
+    }
+  };
+
+  const openRemoteUrl = async (url: string) => {
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('无法打开', '当前链接无法在设备上打开');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (error) {
+      console.error('[DevicesScreen] Failed to open URL:', error);
+      Alert.alert('打开失败', '无法打开该链接');
+    }
+  };
+
+  const shareText = async (text: string, title: string) => {
+    try {
+      await Share.share({title, message: text});
+    } catch (error) {
+      console.error('[DevicesScreen] Failed to share text:', error);
+    }
+  };
+
+  const handleDebugUpload = async (segment: {filePath: string; duration: number; timestamp: number}) => {
+    if (uploadingPath) {
+      return;
+    }
+
+    setUploadingPath(segment.filePath);
+    try {
+      const uploadResponse = await uploadSegment(segment);
+      setUploadedDebugMap(prev => ({
+        ...prev,
+        [segment.filePath]: {
+          status: uploadResponse.status,
+          message: uploadResponse.message,
+          objectUrl: uploadResponse.result?.objectUrl,
+          presignedUrl: uploadResponse.result?.presignedUrl,
+        },
+      }));
+      setLogs(prev => [{timestamp: Date.now(), message: `COS调试上传成功: ${segment.filePath}`}, ...prev].slice(0, 80));
+      Alert.alert('上传成功', '已完成 COS 调试上传');
+    } catch (error: any) {
+      const message = error?.message || '上传失败，请稍后重试';
+      setLogs(prev => [{timestamp: Date.now(), message: `COS调试上传失败: ${message}`}, ...prev].slice(0, 80));
+      Alert.alert('上传失败', message);
+    } finally {
+      setUploadingPath(null);
     }
   };
 
@@ -335,7 +384,54 @@ export function DevicesScreen() {
                               <Text style={styles.secondaryBtnText}>播放原始</Text>
                             </TouchableOpacity>
                           )}
+                          <TouchableOpacity
+                            style={[
+                              styles.secondaryBtn,
+                              uploadedDebugMap[segment.filePath] && styles.debugUploadedBtn,
+                            ]}
+                            disabled={!!uploadingPath}
+                            onPress={() => handleDebugUpload(segment)}>
+                            <Text style={styles.secondaryBtnText}>
+                              {uploadingPath === segment.filePath
+                                ? '上传中...'
+                                : uploadedDebugMap[segment.filePath]
+                                  ? '已上传COS'
+                                  : '上传COS(调试)'}
+                            </Text>
+                          </TouchableOpacity>
                         </View>
+                        {!!uploadedDebugMap[segment.filePath] && (
+                          <View style={styles.debugResultBox}>
+                            <Text style={styles.debugResultTitle}>
+                              上传回显: code {uploadedDebugMap[segment.filePath].status} · {uploadedDebugMap[segment.filePath].message}
+                            </Text>
+
+                            {!!uploadedDebugMap[segment.filePath].objectUrl && (
+                              <View style={styles.debugRow}>
+                                <TouchableOpacity
+                                  style={styles.debugActionBtn}
+                                  onPress={() => openRemoteUrl(uploadedDebugMap[segment.filePath].objectUrl!)}>
+                                  <Text style={styles.debugActionText}>打开 objectUrl</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={styles.debugActionBtn}
+                                  onPress={() => shareText(uploadedDebugMap[segment.filePath].objectUrl!, 'objectUrl')}>
+                                  <Text style={styles.debugActionText}>分享 objectUrl</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+
+                            <Text style={styles.debugLabel}>objectUrl（可长按复制）</Text>
+                            <Text selectable style={styles.debugUrlText}>
+                              {uploadedDebugMap[segment.filePath].objectUrl || '-'}
+                            </Text>
+
+                            <Text style={styles.debugLabel}>presignedUrl（可长按复制）</Text>
+                            <Text selectable style={styles.debugUrlText}>
+                              {uploadedDebugMap[segment.filePath].presignedUrl || '-'}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     ))}
                   </View>
@@ -567,6 +663,50 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 4,
+  },
+  debugUploadedBtn: {
+    backgroundColor: '#173D33',
+  },
+  debugResultBox: {
+    marginTop: 10,
+    backgroundColor: '#171717',
+    borderRadius: 6,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#2D2D2D',
+  },
+  debugResultTitle: {
+    color: '#E5E5E5',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  debugRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  debugActionBtn: {
+    backgroundColor: '#2A2A2A',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  debugActionText: {
+    color: '#00D4AA',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  debugLabel: {
+    color: '#9D9D9D',
+    fontSize: 11,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  debugUrlText: {
+    color: '#CFCFCF',
+    fontSize: 11,
+    lineHeight: 16,
   },
   secondaryBtnText: {
     color: '#00D4AA',

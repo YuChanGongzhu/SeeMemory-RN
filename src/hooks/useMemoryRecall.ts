@@ -1,7 +1,21 @@
 import {useState, useCallback} from 'react';
 import {uploadAudioSegment} from '../services/api';
-import {getToken} from '../services/storage';
 import type {AudioSegment} from '../types';
+
+export interface UploadDebugData {
+  objectUrl?: string;
+  presignedUrl?: string;
+  duration?: number;
+  timestamp?: number;
+  fileExtension?: string;
+  scene?: number;
+}
+
+export interface UploadDebugResponse {
+  status: number;
+  message: string;
+  result: UploadDebugData | null;
+}
 
 interface MemoryItem {
   id: string;
@@ -15,7 +29,7 @@ interface UseMemoryRecallReturn {
   isLoading: boolean;
   error: string | null;
   recall: (query: string) => Promise<void>;
-  uploadSegment: (segment: AudioSegment) => Promise<void>;
+  uploadSegment: (segment: AudioSegment) => Promise<UploadDebugResponse>;
 }
 
 export function useMemoryRecall(): UseMemoryRecallReturn {
@@ -25,24 +39,15 @@ export function useMemoryRecall(): UseMemoryRecallReturn {
 
   // 上传音频片段
   const uploadSegment = useCallback(async (segment: AudioSegment) => {
-    try {
-      const token = await getToken();
-      if (!token) {
-        console.warn('[MemoryRecall] No token, skipping upload');
-        return;
-      }
+    const result = await uploadAudioSegment(
+      undefined,
+      segment.filePath,
+      segment.duration,
+      segment.timestamp
+    );
 
-      const result = await uploadAudioSegment(
-        token,
-        segment.filePath,
-        segment.duration,
-        segment.timestamp
-      );
-
-      console.log('[MemoryRecall] Upload result:', result);
-    } catch (err: any) {
-      console.error('[MemoryRecall] Upload failed:', err);
-    }
+    console.log('[MemoryRecall] Upload result:', result);
+    return result;
   }, []);
 
   // 召回记忆
