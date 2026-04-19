@@ -23,6 +23,26 @@ interface PresignedUrlApiResponse {
   data: PresignedUrlPayload;
 }
 
+interface UploadFileOptions {
+  token?: string;
+  filePath: string;
+  fileExtension?: string;
+  contentType: string;
+  scene: number;
+  extra?: Record<string, unknown>;
+}
+
+interface UploadFileResult {
+  status: number;
+  message: string;
+  result: {
+    objectUrl: string;
+    presignedUrl: string;
+    fileExtension: string;
+    scene: number;
+  } & Record<string, unknown>;
+}
+
 function normalizeFileUri(filePath: string): string {
   return filePath.startsWith('file://') ? filePath : `file://${filePath}`;
 }
@@ -39,8 +59,8 @@ function getFileExtension(filePath: string): string {
 export async function getPresignedUrl(
   fileExtension: string,
   scene: number,
-  token?: string
-  ): Promise<PresignedUrlApiResponse> {
+  token?: string,
+): Promise<PresignedUrlApiResponse> {
   if (!isRouteConfigured(API_ROUTES.getPresignedUrl)) {
     throw new Error('getPresignedUrl route is not configured yet.');
   }
@@ -67,7 +87,7 @@ export async function getPresignedUrl(
     throw new Error(response.msg || 'Failed to get presigned URL.');
   }
 
-    return response;
+  return response;
 }
 
 export async function putFileToPresignedUrl(
@@ -103,6 +123,32 @@ export async function putFileToPresignedUrl(
   }
 }
 
+export async function uploadFileToCos({
+  token,
+  filePath,
+  fileExtension,
+  contentType,
+  scene,
+  extra,
+}: UploadFileOptions): Promise<UploadFileResult> {
+  const resolvedExtension = (fileExtension || getFileExtension(filePath)).toLowerCase();
+  const presignedResult = await getPresignedUrl(resolvedExtension, scene, token);
+  const {presignedUrl, objectUrl} = presignedResult.data;
+  await putFileToPresignedUrl(presignedUrl, filePath, contentType);
+
+  return {
+    status: presignedResult.code,
+    message: presignedResult.msg,
+    result: {
+      objectUrl,
+      presignedUrl,
+      fileExtension: resolvedExtension,
+      scene,
+      ...(extra || {}),
+    },
+  };
+}
+
 export async function createToken(apiKey: string, username: string): Promise<string> {
   if (!isRouteConfigured(API_ROUTES.createToken)) {
     throw new Error('createToken route is not configured yet.');
@@ -123,23 +169,39 @@ export async function uploadAudioSegment(
   const fileExtension = getFileExtension(filePath);
   const scene = 4;
   const contentType = `audio/${fileExtension}`;
-
-    const presignedResult = await getPresignedUrl(fileExtension, scene, token);
-    const {presignedUrl, objectUrl} = presignedResult.data;
-  await putFileToPresignedUrl(presignedUrl, filePath, contentType);
-
-  return {
-      status: presignedResult.code,
-      message: presignedResult.msg,
-    result: {
-      objectUrl,
-      presignedUrl,
+  return uploadFileToCos({
+    token,
+    filePath,
+    fileExtension,
+    contentType,
+    scene,
+    extra: {
       duration,
       timestamp,
-      fileExtension,
-      scene,
     },
-  };
+  });
+}
+
+export async function uploadImageFile(
+  token: string | undefined,
+  filePath: string,
+  mimeType?: string,
+): Promise<UploadResponse> {
+  const fileExtension = getFileExtension(filePath);
+  const scene = 4;
+  const normalizedMimeType =
+    mimeType?.trim() || (fileExtension === 'jpg' ? 'image/jpeg' : `image/${fileExtension}`);
+
+  return uploadFileToCos({
+    token,
+    filePath,
+    fileExtension,
+    contentType: normalizedMimeType,
+    scene,
+    extra: {
+      mimeType: normalizedMimeType,
+    },
+  });
 }
 
 export async function getLatestHistory(token?: string): Promise<any> {

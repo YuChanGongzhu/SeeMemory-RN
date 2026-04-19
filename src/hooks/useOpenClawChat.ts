@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {GatewayClient} from '../openclaw/GatewayClient';
+import {uploadImageFile} from '../services/api';
 import {
   OpenClawChatClient,
   extractText,
@@ -120,6 +121,7 @@ export function useOpenClawChat() {
     },
   ]);
   const [isSending, setIsSending] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   const gatewayRef = useRef<GatewayClient | null>(null);
   const chatRef = useRef<OpenClawChatClient | null>(null);
@@ -417,6 +419,40 @@ export function useOpenClawChat() {
     }
   }, [activeSessionKey, appendSystemMessage, connectionState, ensureLocalSessionKey, mergeSessions]);
 
+  const sendImageMessage = useCallback(
+    async (params: {filePath: string; mimeType?: string; text?: string}) => {
+      if (!chatRef.current || connectionState !== 'connected') {
+        appendSystemMessage('请先连接 Gateway，再上传图片。');
+        return false;
+      }
+
+      setIsUploadingImage(true);
+
+      try {
+        const uploadResponse = await uploadImageFile(
+          undefined,
+          params.filePath,
+          params.mimeType,
+        );
+        const objectUrl = uploadResponse.result?.objectUrl?.trim();
+        if (!objectUrl) {
+          throw new Error('图片上传成功，但未拿到 objectUrl');
+        }
+
+        const textPart = params.text?.trim() || '';
+        const message = textPart ? `${objectUrl}\n${textPart}` : objectUrl;
+        return await sendMessage(message);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '图片上传失败';
+        appendSystemMessage(`图片上传失败：${message}`);
+        return false;
+      } finally {
+        setIsUploadingImage(false);
+      }
+    },
+    [appendSystemMessage, connectionState, sendMessage],
+  );
+
   return useMemo(
     () => ({
       settings,
@@ -429,6 +465,7 @@ export function useOpenClawChat() {
       statusText,
       messages,
       isSending,
+      isUploadingImage,
       updateSetting,
       setDraftSessionKey,
       connect,
@@ -437,6 +474,7 @@ export function useOpenClawChat() {
       selectSession,
       refreshSessions,
       sendMessage,
+      sendImageMessage,
     }),
     [
       settings,
@@ -449,6 +487,7 @@ export function useOpenClawChat() {
       statusText,
       messages,
       isSending,
+      isUploadingImage,
       updateSetting,
       setDraftSessionKey,
       connect,
@@ -457,6 +496,7 @@ export function useOpenClawChat() {
       selectSession,
       refreshSessions,
       sendMessage,
+      sendImageMessage,
     ],
   );
 }

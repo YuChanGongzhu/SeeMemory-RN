@@ -10,14 +10,101 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useOpenClawChat} from '../hooks/useOpenClawChat';
+import {pickImageFromLibrary} from '../native/ImagePickerModule';
 import type {ChatMessage, SessionListItem} from '../openclaw/types';
+
+type BubblePart =
+  | {
+      type: 'text';
+      content: string;
+    }
+  | {
+      type: 'image';
+      url: string;
+    };
+
+function normalizeBubbleText(text: string): string {
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function stripIncompleteTrailingMediaLine(text: string): string {
+  const normalized = text.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  if (lines.length === 0) {
+    return normalized;
+  }
+
+  const lastLine = lines[lines.length - 1]?.trim() || '';
+  if (/^MEDIA:\s*\S*$/i.test(lastLine) && !/^MEDIA:\s*https?:\/\/\S+$/i.test(lastLine)) {
+    return lines.slice(0, -1).join('\n');
+  }
+
+  return normalized;
+}
+
+function buildBubbleParts(text: string, role: ChatMessage['role']): BubblePart[] {
+  const firstLine = text.split('\n')[0]?.trim() || '';
+  const workingText =
+    role === 'user' && /^https?:\/\/\S+$/i.test(firstLine)
+      ? `MEDIA:${firstLine}\n${text.split('\n').slice(1).join('\n')}`
+      : text;
+  const parts: BubblePart[] = [];
+  const lines = workingText.split('\n');
+  let textBuffer: string[] = [];
+
+  const flushTextBuffer = () => {
+    const combined = normalizeBubbleText(textBuffer.join('\n').replace(/[ \t]+\n/g, '\n'));
+    if (combined) {
+      parts.push({
+        type: 'text',
+        content: combined,
+      });
+    }
+    textBuffer = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const mediaMatch = line.match(/^MEDIA:\s*(https?:\/\/\S+)$/i);
+
+    if (mediaMatch?.[1]) {
+      flushTextBuffer();
+      parts.push({
+        type: 'image',
+        url: mediaMatch[1].trim(),
+      });
+      continue;
+    }
+
+    textBuffer.push(rawLine);
+  }
+
+  flushTextBuffer();
+
+  if (parts.length === 0) {
+    const normalized = normalizeBubbleText(text);
+    if (normalized) {
+      parts.push({
+        type: 'text',
+        content: normalized,
+      });
+    }
+  }
+
+  return parts;
+}
 
 export function MemoryScreen() {
   const insets = useSafeAreaInsets();
   const [inputText, setInputText] = useState('');
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
   const {
     settings,
@@ -29,6 +116,7 @@ export function MemoryScreen() {
     statusText,
     messages,
     isSending,
+    isUploadingImage,
     updateSetting,
     setDraftSessionKey,
     connect,
@@ -37,6 +125,7 @@ export function MemoryScreen() {
     selectSession,
     refreshSessions,
     sendMessage,
+    sendImageMessage,
   } = useOpenClawChat();
 
   const handleSend = async () => {
@@ -47,8 +136,31 @@ export function MemoryScreen() {
     }
   };
 
+  const handlePickImage = async () => {
+    try {
+      const picked = await pickImageFromLibrary();
+      if (!picked || picked.didCancel || !picked.filePath) {
+        return;
+      }
+
+      const sent = await sendImageMessage({
+        filePath: picked.filePath,
+        mimeType: picked.mimeType,
+        text: inputText,
+      });
+
+      if (sent) {
+        setInputText('');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '选择图片失败';
+      Alert.alert('图片发送失败', message);
+    }
+  };
+
   const isConnected = connectionState === 'connected';
-  const canSend = isConnected && !isSending && !!inputText.trim();
+  const canSend = isConnected && !isSending && !isUploadingImage && !!inputText.trim();
+  const canPickImage = isConnected && !isSending && !isUploadingImage;
   const statusColor = useMemo(() => {
     switch (connectionState) {
       case 'connected':
@@ -186,7 +298,9 @@ export function MemoryScreen() {
             </View>
           </View>
         }
-        renderItem={({item}) => <ChatBubble item={item} />}
+        renderItem={({item}) => (
+          <ChatBubble item={item} onPreviewImage={setPreviewImageUrl} />
+        )}
         ListEmptyComponent={
           isHydrated ? (
             <Text style={styles.emptyText}>连接成功后就可以开始演示对话了</Text>
@@ -195,6 +309,12 @@ export function MemoryScreen() {
       />
 
       <View style={styles.inputContainer}>
+        <TouchableOpacity
+          style={[styles.mediaBtn, !canPickImage && styles.disabledSendBtn]}
+          onPress={handlePickImage}
+          disabled={!canPickImage}>
+          <Text style={styles.mediaBtnText}>{isUploadingImage ? '上传中' : '图片'}</Text>
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder={isConnected ? '输入消息开始演示...' : '请先连接 Gateway'}
@@ -202,23 +322,64 @@ export function MemoryScreen() {
           value={inputText}
           onChangeText={setInputText}
           onSubmitEditing={handleSend}
-          editable={isConnected && !isSending}
+          editable={isConnected && !isSending && !isUploadingImage}
           multiline
         />
         <TouchableOpacity
           style={[styles.sendBtn, !canSend && styles.disabledSendBtn]}
           onPress={handleSend}
           disabled={!canSend}>
-          <Text style={styles.sendBtnText}>{isSending ? '等待中' : '发送'}</Text>
+          <Text style={styles.sendBtnText}>
+            {isUploadingImage ? '上传中' : isSending ? '等待中' : '发送'}
+          </Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={!!previewImageUrl}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPreviewImageUrl(null)}>
+        <Pressable
+          style={styles.previewOverlay}
+          onPress={() => setPreviewImageUrl(null)}>
+          <Pressable style={styles.previewCard} onPress={() => {}}>
+            {previewImageUrl ? (
+              <Image
+                source={{uri: previewImageUrl}}
+                style={styles.previewImage}
+                resizeMode="contain"
+              />
+            ) : null}
+            <TouchableOpacity
+              style={styles.previewCloseButton}
+              onPress={() => setPreviewImageUrl(null)}>
+              <Text style={styles.previewCloseText}>关闭</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
 
-function ChatBubble({item}: {item: ChatMessage}) {
+function ChatBubble(params: {
+  item: ChatMessage;
+  onPreviewImage: (url: string) => void;
+}) {
+  const {item, onPreviewImage} = params;
   const isSystem = item.role === 'system';
   const isUser = item.role === 'user';
+  const safeTextForRender =
+    item.isStreaming && item.role === 'assistant'
+      ? stripIncompleteTrailingMediaLine(item.text)
+      : item.text;
+  const parts = buildBubbleParts(safeTextForRender, item.role);
+  const lastTextPartIndex = [...parts]
+    .map((part, index) => ({part, index}))
+    .filter(entry => entry.part.type === 'text')
+    .at(-1)?.index;
+  const shouldRenderStreamingCursor = item.isStreaming && lastTextPartIndex == null;
 
   return (
     <View
@@ -228,15 +389,41 @@ function ChatBubble({item}: {item: ChatMessage}) {
         item.role === 'assistant' && styles.assistantBubble,
         isSystem && styles.systemBubble,
       ]}>
-      <Text
-        style={[
-          styles.messageText,
-          isUser && styles.userBubbleText,
-          isSystem && styles.systemBubbleText,
-        ]}>
-        {item.text}
-        {item.isStreaming ? '▋' : ''}
-      </Text>
+      {parts.map((part, index) =>
+        part.type === 'image' ? (
+          <TouchableOpacity
+            key={`${part.url}-${index}`}
+            activeOpacity={0.9}
+            onPress={() => onPreviewImage(part.url)}>
+            <Image
+              source={{uri: part.url}}
+              style={styles.imageBubblePreview}
+              resizeMode="cover"
+            />
+          </TouchableOpacity>
+        ) : (
+          <Text
+            key={`${part.content.slice(0, 24)}-${index}`}
+            style={[
+              styles.messageText,
+              isUser && styles.userBubbleText,
+              isSystem && styles.systemBubbleText,
+            ]}>
+            {part.content}
+            {item.isStreaming && lastTextPartIndex === index ? '▋' : ''}
+          </Text>
+        ),
+      )}
+      {shouldRenderStreamingCursor ? (
+        <Text
+          style={[
+            styles.messageText,
+            isUser && styles.userBubbleText,
+            isSystem && styles.systemBubbleText,
+          ]}>
+          ▋
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -472,6 +659,23 @@ const styles = StyleSheet.create({
     borderTopColor: '#333',
     alignItems: 'flex-end',
   },
+  mediaBtn: {
+    backgroundColor: '#262626',
+    borderWidth: 1,
+    borderColor: '#333',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    minWidth: 64,
+  },
+  mediaBtnText: {
+    color: '#E5E5E5',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   input: {
     flex: 1,
     backgroundColor: '#0D0D0D',
@@ -527,6 +731,47 @@ const styles = StyleSheet.create({
     color: '#E5E5E5',
     fontSize: 14,
     lineHeight: 20,
+  },
+  imageBubblePreview: {
+    width: 180,
+    height: 180,
+    borderRadius: 10,
+    marginBottom: 10,
+    backgroundColor: '#111',
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  previewCard: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewImage: {
+    width: '100%',
+    height: '78%',
+    maxWidth: 420,
+    maxHeight: 720,
+    backgroundColor: '#111',
+    borderRadius: 14,
+  },
+  previewCloseButton: {
+    marginTop: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#1F1F1F',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  previewCloseText: {
+    color: '#E5E5E5',
+    fontSize: 14,
+    fontWeight: '600',
   },
   userBubbleText: {
     color: '#FFFFFF',

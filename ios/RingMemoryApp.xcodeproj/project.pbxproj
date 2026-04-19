@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		2B11A002D31C4E10A1000001 /* RingMemoryApp/ImagePickerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */; };
+		2B11A002D31C4E10A1000002 /* RingMemoryApp/ImagePickerModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */; };
 		2B11A001D31C4E10A1000001 /* RingMemoryApp/RTNRingModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */; };
 		2B11A001D31C4E10A1000002 /* RingMemoryApp/RTNRingModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */; };
 		2B11A001D31C4E10A1000003 /* BCLRingSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000013 /* BCLRingSDK.xcframework */; };
@@ -37,6 +39,8 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = RingMemoryApp/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = RingMemoryApp/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = RingMemoryApp/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/ImagePickerModule.swift; sourceTree = "<group>"; };
+		2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/ImagePickerModule.mm; sourceTree = "<group>"; };
 		2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/RTNRingModule.swift; sourceTree = "<group>"; };
 		2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/RTNRingModule.mm; sourceTree = "<group>"; };
 		2B11A001D31C4E10A1000013 /* BCLRingSDK.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:M5T47WSVG3:BRAVECHIPTECHCoLtd"; lastKnownFileType = wrapper.xcframework; path = BCLRingSDK.xcframework; sourceTree = "<group>"; };
@@ -66,6 +70,8 @@
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
+				2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */,
+				2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */,
 				2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */,
 				2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -259,6 +265,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
+				2B11A002D31C4E10A1000002 /* RingMemoryApp/ImagePickerModule.mm in Sources */,
+				2B11A002D31C4E10A1000001 /* RingMemoryApp/ImagePickerModule.swift in Sources */,
 				2B11A001D31C4E10A1000002 /* RingMemoryApp/RTNRingModule.mm in Sources */,
 				2B11A001D31C4E10A1000001 /* RingMemoryApp/RTNRingModule.swift in Sources */,
 			);
