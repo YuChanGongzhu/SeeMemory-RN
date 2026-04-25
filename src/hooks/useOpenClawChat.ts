@@ -30,17 +30,19 @@ function upsertAssistantMessage(
     item => item.role === 'assistant' && item.runId === runId,
   );
 
-  if (payload.state === 'delta') {
-    if (existingIndex >= 0) {
-      const nextMessages = [...messages];
-      const current = nextMessages[existingIndex];
-      nextMessages[existingIndex] = {
-        ...current,
-        text: `${current.text}${text}`,
-        isStreaming: true,
-      };
-      return nextMessages;
-    }
+    if (payload.state === 'delta') {
+      if (existingIndex >= 0) {
+        const nextMessages = [...messages];
+        const current = nextMessages[existingIndex];
+        nextMessages[existingIndex] = {
+          ...current,
+          text: `${current.text}${text}`,
+          isStreaming: true,
+          debugRaw: payload,
+          debugSource: 'event',
+        };
+        return nextMessages;
+      }
 
     return [
       ...messages,
@@ -50,6 +52,8 @@ function upsertAssistantMessage(
         text,
         isStreaming: true,
         runId,
+        debugRaw: payload,
+        debugSource: 'event',
       },
     ];
   }
@@ -62,6 +66,8 @@ function upsertAssistantMessage(
         ...current,
         text: text || current.text,
         isStreaming: false,
+        debugRaw: payload,
+        debugSource: 'event',
       };
       return nextMessages;
     }
@@ -78,6 +84,8 @@ function upsertAssistantMessage(
         text,
         isStreaming: false,
         runId,
+        debugRaw: payload,
+        debugSource: 'event',
       },
     ];
   }

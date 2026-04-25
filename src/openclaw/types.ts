@@ -69,6 +69,8 @@ export interface ChatMessage {
   text: string;
   isStreaming?: boolean;
   runId?: string;
+  debugRaw?: unknown;
+  debugSource?: 'event' | 'history';
 }
 
 export interface SessionListItem {

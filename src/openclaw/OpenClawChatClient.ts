@@ -31,6 +31,23 @@ export function extractText(message: unknown): string {
       lastMessagePreview?: unknown;
     };
 
+    if (Array.isArray(maybeMessage.content)) {
+      const contentText = maybeMessage.content
+        .map(block => {
+          if (typeof block?.text === 'string') {
+            return block.text;
+          }
+          return extractText(block);
+        })
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+
+      if (contentText) {
+        return contentText;
+      }
+    }
+
     if (typeof maybeMessage.text === 'string') {
       return maybeMessage.text;
     }
@@ -51,17 +68,6 @@ export function extractText(message: unknown): string {
       return maybeMessage.lastMessagePreview;
     }
 
-    if (Array.isArray(maybeMessage.content)) {
-      return maybeMessage.content
-        .map(block => {
-          if (typeof block?.text === 'string') {
-            return block.text;
-          }
-          return extractText(block);
-        })
-        .filter(Boolean)
-        .join('');
-    }
   }
 
   return '';
@@ -381,6 +387,8 @@ export function normalizeHistoryMessages(messages: unknown[] | undefined): ChatM
           : `history-${index}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text: normalizedText,
+      debugRaw: message,
+      debugSource: 'history',
     }];
   });
 }

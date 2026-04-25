@@ -1,4 +1,4 @@
-import React, {useMemo, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useOpenClawChat} from '../hooks/useOpenClawChat';
 import {pickImageFromLibrary} from '../native/ImagePickerModule';
 import type {ChatMessage, SessionListItem} from '../openclaw/types';
+import {ChatComposerDraftStore, type ChatComposerDraft} from '../storage/ChatComposerDraftStore';
 
 type BubblePart =
   | {
@@ -28,25 +29,42 @@ type BubblePart =
   | {
       type: 'image';
       url: string;
+    }
+  | {
+      type: 'audio';
+      url: string;
     };
+
+function detectMediaKind(url: string): 'image' | 'audio' | null {
+  const cleanUrl = url.split('?')[0]?.toLowerCase() || '';
+  if (/\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(cleanUrl)) {
+    return 'image';
+  }
+  if (/\.(wav|mp3|m4a|aac|ogg|opus|flac)$/i.test(cleanUrl)) {
+    return 'audio';
+  }
+  return null;
+}
+
+function buildDraftMessage(draft: ChatComposerDraft): string {
+  const text = draft.text?.trim() || '';
+  const mediaUrl = draft.mediaUrl?.trim() || '';
+  if (mediaUrl && text) {
+    return `${mediaUrl}\n${text}`;
+  }
+  return mediaUrl || text;
+}
+
+function buildDraftKey(draft: ChatComposerDraft): string {
+  return [
+    draft.createdAt,
+    draft.mediaUrl?.trim() || '',
+    draft.text?.trim() || '',
+  ].join('::');
+}
 
 function normalizeBubbleText(text: string): string {
   return text.replace(/\n{3,}/g, '\n\n').trim();
-}
-
-function stripIncompleteTrailingMediaLine(text: string): string {
-  const normalized = text.replace(/\r\n/g, '\n');
-  const lines = normalized.split('\n');
-  if (lines.length === 0) {
-    return normalized;
-  }
-
-  const lastLine = lines[lines.length - 1]?.trim() || '';
-  if (/^MEDIA:\s*\S*$/i.test(lastLine) && !/^MEDIA:\s*https?:\/\/\S+$/i.test(lastLine)) {
-    return lines.slice(0, -1).join('\n');
-  }
-
-  return normalized;
 }
 
 function buildBubbleParts(text: string, role: ChatMessage['role']): BubblePart[] {
@@ -76,10 +94,22 @@ function buildBubbleParts(text: string, role: ChatMessage['role']): BubblePart[]
 
     if (mediaMatch?.[1]) {
       flushTextBuffer();
-      parts.push({
-        type: 'image',
-        url: mediaMatch[1].trim(),
-      });
+      const mediaUrl = mediaMatch[1].trim();
+      const mediaKind = detectMediaKind(mediaUrl);
+
+      if (mediaKind === 'image') {
+        parts.push({
+          type: 'image',
+          url: mediaUrl,
+        });
+      } else if (mediaKind === 'audio') {
+        parts.push({
+          type: 'audio',
+          url: mediaUrl,
+        });
+      } else {
+        textBuffer.push(mediaUrl);
+      }
       continue;
     }
 
@@ -105,7 +135,19 @@ export function MemoryScreen() {
   const insets = useSafeAreaInsets();
   const [inputText, setInputText] = useState('');
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [pendingComposerDraft, setPendingComposerDraft] = useState<ChatComposerDraft | null>(null);
+  const [debugMessage, setDebugMessage] = useState<ChatMessage | null>(null);
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
+  const activeAutoSendDraftKeyRef = useRef<string | null>(null);
+  const debugTapRef = useRef<{
+    messageId: string | null;
+    count: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({
+    messageId: null,
+    count: 0,
+    timer: null,
+  });
   const {
     settings,
     draftSessionKey,
@@ -128,12 +170,96 @@ export function MemoryScreen() {
     sendImageMessage,
   } = useOpenClawChat();
 
+  useEffect(() => {
+    let active = true;
+
+    const applyDraft = (draft: ChatComposerDraft | null) => {
+      if (!active || (!draft?.text?.trim() && !draft?.mediaUrl?.trim())) {
+        return;
+      }
+      setPendingComposerDraft(draft);
+    };
+
+    const unsubscribe = ChatComposerDraftStore.subscribe(draft => {
+      applyDraft(draft);
+    });
+
+    void ChatComposerDraftStore.load().then(draft => {
+      applyDraft(draft);
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingComposerDraft) {
+      return;
+    }
+
+    const draftText = buildDraftMessage(pendingComposerDraft).trim();
+    const draftKey = buildDraftKey(pendingComposerDraft);
+
+    if (!draftText) {
+      setPendingComposerDraft(null);
+      activeAutoSendDraftKeyRef.current = null;
+      void ChatComposerDraftStore.clear();
+      return;
+    }
+
+    if (!isConnected || isSending || isUploadingImage) {
+      return;
+    }
+
+    if (activeAutoSendDraftKeyRef.current === draftKey) {
+      return;
+    }
+
+    let cancelled = false;
+    activeAutoSendDraftKeyRef.current = draftKey;
+
+    void (async () => {
+      setPendingComposerDraft(current =>
+        current && buildDraftKey(current) === draftKey ? null : current,
+      );
+      await ChatComposerDraftStore.clear();
+      setInputText('');
+      const sent = await sendMessage(draftText);
+      if (cancelled) {
+        if (activeAutoSendDraftKeyRef.current === draftKey) {
+          activeAutoSendDraftKeyRef.current = null;
+        }
+        return;
+      }
+
+      if (activeAutoSendDraftKeyRef.current === draftKey) {
+        activeAutoSendDraftKeyRef.current = null;
+      }
+
+      if (sent) {
+        return;
+      }
+
+      setInputText(current => (current.trim() ? current : draftText));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, isSending, isUploadingImage, pendingComposerDraft, sendMessage]);
+
   const handleSend = async () => {
     if (!inputText.trim()) return;
-    const sent = await sendMessage(inputText);
+    const messageToSend = inputText;
+    setInputText('');
+    const sent = await sendMessage(messageToSend);
     if (sent) {
       setInputText('');
+      return;
     }
+    setInputText(messageToSend);
   };
 
   const handlePickImage = async () => {
@@ -174,6 +300,49 @@ export function MemoryScreen() {
         return '#666666';
     }
   }, [connectionState]);
+
+  const handleDebugTap = (item: ChatMessage) => {
+    if (item.role !== 'assistant' || !item.debugRaw) {
+      return;
+    }
+
+    if (debugTapRef.current.timer) {
+      clearTimeout(debugTapRef.current.timer);
+    }
+
+    if (debugTapRef.current.messageId === item.id) {
+      debugTapRef.current.count += 1;
+    } else {
+      debugTapRef.current.messageId = item.id;
+      debugTapRef.current.count = 1;
+    }
+
+    if (debugTapRef.current.count >= 5) {
+      debugTapRef.current.messageId = null;
+      debugTapRef.current.count = 0;
+      debugTapRef.current.timer = null;
+      setDebugMessage(item);
+      return;
+    }
+
+    debugTapRef.current.timer = setTimeout(() => {
+      debugTapRef.current.messageId = null;
+      debugTapRef.current.count = 0;
+      debugTapRef.current.timer = null;
+    }, 1400);
+  };
+
+  const debugText = useMemo(() => {
+    if (!debugMessage?.debugRaw) {
+      return '';
+    }
+
+    try {
+      return JSON.stringify(debugMessage.debugRaw, null, 2);
+    } catch {
+      return String(debugMessage.debugRaw);
+    }
+  }, [debugMessage]);
 
   return (
     <KeyboardAvoidingView
@@ -299,7 +468,11 @@ export function MemoryScreen() {
           </View>
         }
         renderItem={({item}) => (
-          <ChatBubble item={item} onPreviewImage={setPreviewImageUrl} />
+          <ChatBubble
+            item={item}
+            onPreviewImage={setPreviewImageUrl}
+            onDebugTap={handleDebugTap}
+          />
         )}
         ListEmptyComponent={
           isHydrated ? (
@@ -359,6 +532,32 @@ export function MemoryScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <Modal
+        visible={!!debugMessage}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setDebugMessage(null)}>
+        <Pressable
+          style={styles.previewOverlay}
+          onPress={() => setDebugMessage(null)}>
+          <Pressable style={[styles.previewCard, styles.debugCard]} onPress={() => {}}>
+            <Text style={styles.debugModalTitle}>
+              原始响应 · {debugMessage?.debugSource === 'history' ? 'history' : 'event'}
+            </Text>
+            <ScrollView style={styles.debugScroll} contentContainerStyle={styles.debugScrollContent}>
+              <Text selectable style={styles.debugModalText}>
+                {debugText}
+              </Text>
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.previewCloseButton}
+              onPress={() => setDebugMessage(null)}>
+              <Text style={styles.previewCloseText}>关闭</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -366,15 +565,13 @@ export function MemoryScreen() {
 function ChatBubble(params: {
   item: ChatMessage;
   onPreviewImage: (url: string) => void;
+  onDebugTap: (item: ChatMessage) => void;
 }) {
-  const {item, onPreviewImage} = params;
+  const {item, onPreviewImage, onDebugTap} = params;
   const isSystem = item.role === 'system';
   const isUser = item.role === 'user';
-  const safeTextForRender =
-    item.isStreaming && item.role === 'assistant'
-      ? stripIncompleteTrailingMediaLine(item.text)
-      : item.text;
-  const parts = buildBubbleParts(safeTextForRender, item.role);
+  const isAssistant = item.role === 'assistant';
+  const parts = buildBubbleParts(item.text, item.role);
   const lastTextPartIndex = [...parts]
     .map((part, index) => ({part, index}))
     .filter(entry => entry.part.type === 'text')
@@ -388,19 +585,48 @@ function ChatBubble(params: {
         isUser && styles.userBubble,
         item.role === 'assistant' && styles.assistantBubble,
         isSystem && styles.systemBubble,
-      ]}>
+      ]}
+      onStartShouldSetResponder={() => isAssistant}
+      onResponderRelease={() => {
+        if (isAssistant) {
+          onDebugTap(item);
+        }
+      }}>
       {parts.map((part, index) =>
         part.type === 'image' ? (
           <TouchableOpacity
             key={`${part.url}-${index}`}
             activeOpacity={0.9}
-            onPress={() => onPreviewImage(part.url)}>
+            onPress={() => {
+              onDebugTap(item);
+              onPreviewImage(part.url);
+            }}>
             <Image
               source={{uri: part.url}}
               style={styles.imageBubblePreview}
               resizeMode="cover"
             />
           </TouchableOpacity>
+        ) : part.type === 'audio' ? (
+          <View key={`${part.url}-${index}`} style={styles.audioBubbleCard}>
+            <Text
+              style={[
+                styles.audioBubbleLabel,
+                isUser && styles.userBubbleText,
+                isSystem && styles.systemBubbleText,
+              ]}>
+              音频附件
+            </Text>
+            <Text
+              selectable
+              style={[
+                styles.audioBubbleUrl,
+                isUser && styles.userBubbleText,
+                isSystem && styles.systemBubbleText,
+              ]}>
+              {part.url}
+            </Text>
+          </View>
         ) : (
           <Text
             key={`${part.content.slice(0, 24)}-${index}`}
@@ -739,6 +965,23 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: '#111',
   },
+  audioBubbleCard: {
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
+  },
+  audioBubbleLabel: {
+    color: '#E5E5E5',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  audioBubbleUrl: {
+    color: '#CFE8FF',
+    fontSize: 12,
+    lineHeight: 18,
+  },
   previewOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.92)',
@@ -750,6 +993,18 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  debugCard: {
+    width: '92%',
+    maxWidth: 520,
+    maxHeight: '82%',
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+    backgroundColor: '#171717',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2D2D2D',
   },
   previewImage: {
     width: '100%',
@@ -772,6 +1027,29 @@ const styles = StyleSheet.create({
     color: '#E5E5E5',
     fontSize: 14,
     fontWeight: '600',
+  },
+  debugModalTitle: {
+    color: '#E5E5E5',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+  debugScroll: {
+    width: '100%',
+    maxHeight: '86%',
+  },
+  debugScrollContent: {
+    paddingBottom: 12,
+  },
+  debugModalText: {
+    color: '#D0D0D0',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: Platform.select({
+      ios: 'Menlo',
+      android: 'monospace',
+      default: 'monospace',
+    }),
   },
   userBubbleText: {
     color: '#FFFFFF',

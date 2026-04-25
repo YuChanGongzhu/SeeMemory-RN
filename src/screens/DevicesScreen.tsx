@@ -1,17 +1,22 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Platform, Share, Linking} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {useNavigation} from '@react-navigation/native';
 import {useRingScanner} from '../hooks/useRingScanner';
 import {useAudioCapture} from '../hooks/useAudioCapture';
 import {DeviceCard} from '../components/DeviceCard';
 import type {RingDebugLog, RingDevice} from '../types';
 import {useMemoryRecall} from '../hooks/useMemoryRecall';
 import {isRingModuleAvailable, ringEventEmitter} from '../native/RingModule';
+import {ChatComposerDraftStore} from '../storage/ChatComposerDraftStore';
+import {transcribeAudioFile} from '../services/api';
 
 export function DevicesScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const [logs, setLogs] = useState<RingDebugLog[]>([]);
   const [uploadingPath, setUploadingPath] = useState<string | null>(null);
+  const [chatUploadingPath, setChatUploadingPath] = useState<string | null>(null);
   const [uploadedDebugMap, setUploadedDebugMap] = useState<
     Record<
       string,
@@ -184,7 +189,7 @@ export function DevicesScreen() {
   };
 
   const handleDebugUpload = async (segment: {filePath: string; duration: number; timestamp: number}) => {
-    if (uploadingPath) {
+    if (uploadingPath || chatUploadingPath) {
       return;
     }
 
@@ -208,6 +213,50 @@ export function DevicesScreen() {
       Alert.alert('上传失败', message);
     } finally {
       setUploadingPath(null);
+    }
+  };
+
+  const handleSendToChat = async (segment: {filePath: string; duration: number; timestamp: number}) => {
+    if (uploadingPath || chatUploadingPath) {
+      return;
+    }
+
+    setChatUploadingPath(segment.filePath);
+    try {
+      setLogs(prev => [
+        {timestamp: Date.now(), message: `开始并行处理录音上传和 ASR: ${segment.filePath}`},
+        ...prev,
+      ].slice(0, 80));
+
+      const [uploadResponse, transcript] = await Promise.all([
+        uploadSegment(segment),
+        transcribeAudioFile(segment.filePath),
+      ]);
+
+      const objectUrl = uploadResponse.result?.objectUrl?.trim();
+      if (!objectUrl) {
+        throw new Error('录音上传成功，但未拿到 objectUrl');
+      }
+
+      await ChatComposerDraftStore.save({
+        text: transcript,
+        mediaUrl: objectUrl,
+        mediaKind: 'audio',
+        source: 'device-audio',
+        createdAt: Date.now(),
+      });
+
+      setLogs(prev => [{
+        timestamp: Date.now(),
+        message: `录音上传和 ASR 完成，已合并带到聊天窗口: ${segment.filePath}`,
+      }, ...prev].slice(0, 80));
+      navigation.navigate('Memory');
+    } catch (error: any) {
+      const message = error?.message || '录音发送到聊天失败，请稍后重试';
+      setLogs(prev => [{timestamp: Date.now(), message: `录音带入聊天失败: ${message}`}, ...prev].slice(0, 80));
+      Alert.alert('发送失败', message);
+    } finally {
+      setChatUploadingPath(null);
     }
   };
 
@@ -358,6 +407,14 @@ export function DevicesScreen() {
                           <TouchableOpacity style={styles.secondaryBtn} onPress={() => shareSegment(segment.filePath)}>
                             <Text style={styles.secondaryBtnText}>分享</Text>
                           </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.secondaryBtn, styles.chatSendBtn]}
+                            disabled={!!uploadingPath || !!chatUploadingPath}
+                            onPress={() => handleSendToChat(segment)}>
+                            <Text style={styles.secondaryBtnText}>
+                              {chatUploadingPath === segment.filePath ? '发送中...' : '发到聊天'}
+                            </Text>
+                          </TouchableOpacity>
                           {!segment.isDenoised && (
                             <TouchableOpacity
                               style={styles.secondaryBtn}
@@ -389,7 +446,7 @@ export function DevicesScreen() {
                               styles.secondaryBtn,
                               uploadedDebugMap[segment.filePath] && styles.debugUploadedBtn,
                             ]}
-                            disabled={!!uploadingPath}
+                            disabled={!!uploadingPath || !!chatUploadingPath}
                             onPress={() => handleDebugUpload(segment)}>
                             <Text style={styles.secondaryBtnText}>
                               {uploadingPath === segment.filePath
@@ -656,13 +713,19 @@ const styles = StyleSheet.create({
   },
   recordingActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
+    rowGap: 8,
   },
   secondaryBtn: {
     backgroundColor: '#232323',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 4,
+    flexShrink: 0,
+  },
+  chatSendBtn: {
+    backgroundColor: '#0F3B35',
   },
   debugUploadedBtn: {
     backgroundColor: '#173D33',
