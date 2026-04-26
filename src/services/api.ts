@@ -43,8 +43,24 @@ interface UploadFileResult {
   } & Record<string, unknown>;
 }
 
+interface AsrResponse {
+  text?: string;
+  [key: string]: unknown;
+}
+
+const AMPHION_ASR_ENDPOINT = 'https://amphion.top/asr/v1/audio/transcriptions';
+const AMPHION_ASR_API_KEY = 'sk-2d106f6227476125be26a20fd3fbd62875bea1146440ebfd1d8a2bde477a2631';
+const AMPHION_ASR_AUTH_MODE: 'bearer' | 'x-api-key' | 'query' = 'bearer';
+const AMPHION_ASR_LANGUAGE = '';
+
 function normalizeFileUri(filePath: string): string {
   return filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+}
+
+function getFileName(filePath: string): string {
+  const cleaned = filePath.split('?')[0] || '';
+  const parts = cleaned.split(/[\\/]/);
+  return parts[parts.length - 1] || `audio.${getFileExtension(filePath)}`;
 }
 
 function getFileExtension(filePath: string): string {
@@ -54,6 +70,21 @@ function getFileExtension(filePath: string): string {
     return 'wav';
   }
   return cleaned.slice(index + 1).toLowerCase();
+}
+
+function buildAmphionAsrRequestInfo() {
+  const url = new URL(AMPHION_ASR_ENDPOINT);
+  const headers: Record<string, string> = {};
+
+  if (AMPHION_ASR_AUTH_MODE === 'query') {
+    url.searchParams.set('api_key', AMPHION_ASR_API_KEY);
+  } else if (AMPHION_ASR_AUTH_MODE === 'x-api-key') {
+    headers['X-API-Key'] = AMPHION_ASR_API_KEY;
+  } else {
+    headers.Authorization = `Bearer ${AMPHION_ASR_API_KEY}`;
+  }
+
+  return {url: url.toString(), headers};
 }
 
 export async function getPresignedUrl(
@@ -180,6 +211,52 @@ export async function uploadAudioSegment(
       timestamp,
     },
   });
+}
+
+export async function transcribeAudioFile(filePath: string): Promise<string> {
+  const {url, headers} = buildAmphionAsrRequestInfo();
+  const fileExtension = getFileExtension(filePath);
+  const mimeType = fileExtension === 'wav' ? 'audio/wav' : `audio/${fileExtension}`;
+  const form = new FormData();
+
+  form.append('file', {
+    uri: normalizeFileUri(filePath),
+    name: getFileName(filePath),
+    type: mimeType,
+  } as any);
+
+  if (AMPHION_ASR_LANGUAGE) {
+    form.append('language', AMPHION_ASR_LANGUAGE);
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  const rawText = await response.text();
+  let payload: AsrResponse | {raw: string};
+  try {
+    payload = JSON.parse(rawText) as AsrResponse;
+  } catch {
+    payload = {raw: rawText};
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `ASR 请求失败 (${response.status}): ${
+        typeof payload === 'object' ? JSON.stringify(payload) : rawText
+      }`,
+    );
+  }
+
+  const transcript = typeof payload.text === 'string' ? payload.text.trim() : '';
+  if (!transcript) {
+    throw new Error('ASR 成功返回，但未拿到可用文本');
+  }
+
+  return transcript;
 }
 
 export async function uploadImageFile(

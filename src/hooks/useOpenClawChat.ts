@@ -389,6 +389,24 @@ export function useOpenClawChat() {
     }
   }, [connectionState, draftSessionKey, ensureLocalSessionKey, loadSessionHistory, refreshSessions]);
 
+  const createSessionWithKey = useCallback(async (sessionKey: string) => {
+    const normalizedKey = await ensureLocalSessionKey(sessionKey || 'main');
+    setActiveSessionKey(normalizedKey);
+    setDraftSessionKey(normalizedKey);
+    setMessages([
+      {
+        id: createMessageId('system'),
+        role: 'system',
+        text: `已切换到新会话 ${normalizedKey}。连接后即可开始对话。`,
+      },
+    ]);
+    if (connectionState === 'connected') {
+      await loadSessionHistory(normalizedKey);
+      await refreshSessions();
+    }
+    return normalizedKey;
+  }, [connectionState, ensureLocalSessionKey, loadSessionHistory, refreshSessions]);
+
   const selectSession = useCallback(async (sessionKey: string) => {
     await loadSessionHistory(sessionKey);
   }, [loadSessionHistory]);
@@ -479,6 +497,7 @@ export function useOpenClawChat() {
       connect,
       disconnect,
       createSession,
+      createSessionWithKey,
       selectSession,
       refreshSessions,
       sendMessage,
@@ -501,6 +520,7 @@ export function useOpenClawChat() {
       connect,
       disconnect,
       createSession,
+      createSessionWithKey,
       selectSession,
       refreshSessions,
       sendMessage,
