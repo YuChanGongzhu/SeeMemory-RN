@@ -27,7 +27,7 @@ def patch_hermes_cli_path(installer)
   end
 end
 
-platform :ios, min_ios_version_supported
+platform :ios, '16.0'
 prepare_react_native_project!
 
 use_frameworks! :linkage => :dynamic
@@ -50,6 +50,11 @@ target 'RingMemoryApp' do
   pod 'RxCocoa', '~> 6.9.0'
   pod 'SwiftDate'
   pod 'SwiftyBeaver', '1.9.5'
+
+  # Rokid CXR-L SDK integration.
+  pod 'RTNRokidModule', :path => './LocalPods/RTNRokidModule'
+  pod 'RGCxrClient'
+  pod 'RGCoreKit'
 
   post_install do |installer|
     react_native_post_install(

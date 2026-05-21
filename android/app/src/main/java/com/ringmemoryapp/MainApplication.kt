@@ -9,6 +9,7 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.ringmemoryapp.imagepicker.ImagePickerPackage
 import com.lm.sdk.LmAPI
 import com.ringmemoryapp.rtnringmodule.RingPackage
+import com.ringmemoryapp.rokid.RokidPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -19,6 +20,7 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Packages that cannot be autolinked yet can be added manually here, for example:
           add(RingPackage())
+          add(RokidPackage())
           add(ImagePickerPackage())
         },
     )
