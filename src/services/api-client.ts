@@ -1,5 +1,5 @@
 import {getToken} from './storage';
-import {API_AUTH_TOKEN_OVERRIDE, API_BASE_URL, type ApiRoute} from './api-routes';
+import {API_BASE_URL, type ApiRoute} from './api-routes';
 
 type HeadersMap = Record<string, string>;
 
@@ -54,24 +54,12 @@ export async function apiRequest<T>(
 
   if (route.requiresAuth) {
     const storedToken = await getToken();
-    const token = API_AUTH_TOKEN_OVERRIDE || options.authToken || storedToken || '';
+    const token = options.authToken || storedToken || '';
     if (!token) {
       throw new Error(`Authorization token is required for route: ${route.path}`);
     }
-    // Backend currently expects raw token in Authorization header.
+    // This legacy upload host (seemem.com/api/v1) expects the raw token.
     headers.Authorization = token;
-    const tokenSource = API_AUTH_TOKEN_OVERRIDE
-      ? 'API_AUTH_TOKEN_OVERRIDE'
-      : options.authToken
-        ? 'options.authToken'
-        : storedToken
-          ? 'storage.getToken'
-          : 'none';
-    console.log('[apiRequest] Auth source', {
-      route: route.path,
-      tokenSource,
-      authPreview: `${token.slice(0, 8)}...`,
-    });
   }
 
   if (options.body !== undefined && options.body !== null) {

@@ -1,17 +1,27 @@
 import React, {useState} from 'react';
-import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Switch} from 'react-native';
+import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Switch, Modal, Alert} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useTheme} from './ThemeProvider';
 import type {ThemeMode} from './index';
+import {useAuth} from '../auth/AuthContext';
+import {DeviceSelectScreen} from '../screens/DeviceSelectScreen';
 
 type AIPersonality = 'rational' | 'enthusiastic' | 'professional';
 
 export function SettingsScreen() {
-  const {theme, themeMode, setThemeMode, toggleTheme} = useTheme();
+  const {theme, themeMode, setThemeMode} = useTheme();
   const insets = useSafeAreaInsets();
+  const {user, selectedDevice, logout} = useAuth();
   const [aiPersonality, setAiPersonality] = useState<AIPersonality>('professional');
-  const [autoSync, setAutoSync] = useState(true);
   const [cloudSync, setCloudSync] = useState(false);
+  const [deviceModalVisible, setDeviceModalVisible] = useState(false);
+
+  const handleLogout = () => {
+    Alert.alert('退出登录', '确定要退出当前账号吗？', [
+      {text: '取消', style: 'cancel'},
+      {text: '退出', style: 'destructive', onPress: () => void logout()},
+    ]);
+  };
 
   const s = theme.spacing;
   const r = theme.radius;
@@ -36,11 +46,43 @@ export function SettingsScreen() {
   };
 
   return (
+    <>
     <ScrollView style={[localStyles.container, {backgroundColor: theme.colors.bg, flex: 1}]} contentContainerStyle={{paddingBottom: s.xxl}}>
       {/* Header */}
       <View style={[localStyles.header, {paddingTop: insets.top + s.md, paddingHorizontal: s.md, paddingBottom: s.sm, borderBottomColor: theme.colors.border, borderBottomWidth: 1}]}>
-        {theme.mode === 'neon' && <Text style={{color: theme.colors.accent, fontSize: 16, fontWeight: '700', letterSpacing: 2}}>// 设置中心</Text>}
+        {theme.mode === 'neon' && <Text style={{color: theme.colors.accent, fontSize: 16, fontWeight: '700', letterSpacing: 2}}>{'// 设置中心'}</Text>}
         {theme.mode === 'warm' && <Text style={{color: theme.colors.text, fontSize: 22, fontWeight: '700'}}>🌻 设置中心</Text>}
+      </View>
+
+      {/* Memory Box Section */}
+      <View style={[localStyles.section, {padding: s.md, borderBottomWidth: 1, borderBottomColor: theme.colors.border}]}>
+        <Text style={[localStyles.sectionTitle, {color: theme.mode === 'warm' ? theme.colors.textMuted : theme.colors.accent, fontSize: 11, marginBottom: s.sm}]}>
+          {theme.mode === 'warm' ? '🧠 记忆盒子' : '// 记忆盒子'}
+        </Text>
+        <TouchableOpacity
+          style={{
+            backgroundColor: theme.colors.bgSecondary,
+            borderRadius: r.md,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            padding: s.md,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+          onPress={() => setDeviceModalVisible(true)}>
+          <View style={{flex: 1, paddingRight: s.sm}}>
+            <Text style={{color: theme.colors.text, fontSize: 14, fontWeight: '600'}} numberOfLines={1}>
+              {selectedDevice?.name || selectedDevice?.subDomain || '未选择盒子'}
+            </Text>
+            <Text style={{color: theme.colors.textSecondary, fontSize: 12, marginTop: 2}} numberOfLines={1}>
+              {selectedDevice ? '当前 App 对话与记忆指向此盒子' : '点此选择一个云端 / 实体记忆盒子'}
+            </Text>
+          </View>
+          <Text style={{color: theme.colors.accent, fontSize: 13, fontWeight: '600'}}>
+            {selectedDevice ? '切换' : '选择'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Theme Selector */}
@@ -90,12 +132,14 @@ export function SettingsScreen() {
           {theme.mode === 'warm' ? '👤 个人信息' : '// 账户'}
         </Text>
 
-        <TouchableOpacity style={[localStyles.item, {paddingVertical: s.sm + 4, borderBottomWidth: 1, borderBottomColor: theme.colors.border}]}>
+        <View style={[localStyles.item, {paddingVertical: s.sm + 4, borderBottomWidth: 1, borderBottomColor: theme.colors.border}]}>
           <Text style={[localStyles.itemText, {color: theme.colors.text}]}>
-            {'账户管理'}
+            {'账户'}
           </Text>
-          <Text style={[localStyles.itemArrow, {color: theme.colors.textMuted}]}>→</Text>
-        </TouchableOpacity>
+          <Text style={[localStyles.itemValue, {color: theme.colors.textSecondary}]}>
+            {user?.phone || user?.nickname || '已登录'}
+          </Text>
+        </View>
 
         <View style={[localStyles.item, {paddingVertical: s.sm + 4, borderBottomWidth: 1, borderBottomColor: theme.colors.border}]}>
           <Text style={[localStyles.itemText, {color: theme.colors.text}]}>
@@ -241,6 +285,22 @@ export function SettingsScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Logout */}
+      <View style={{paddingHorizontal: s.md, paddingTop: s.md}}>
+        <TouchableOpacity
+          style={{
+            backgroundColor: theme.colors.bgSecondary,
+            borderWidth: 1,
+            borderColor: theme.colors.error,
+            borderRadius: r.md,
+            paddingVertical: s.sm + 4,
+            alignItems: 'center',
+          }}
+          onPress={handleLogout}>
+          <Text style={{color: theme.colors.error, fontSize: 14, fontWeight: '700'}}>退出登录</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Theme Name Footer */}
       <View style={{alignItems: 'center', paddingVertical: s.lg}}>
         <Text style={{color: theme.colors.textMuted, fontSize: 11}}>
@@ -248,6 +308,14 @@ export function SettingsScreen() {
         </Text>
       </View>
     </ScrollView>
+
+    <Modal
+      visible={deviceModalVisible}
+      animationType="slide"
+      onRequestClose={() => setDeviceModalVisible(false)}>
+      <DeviceSelectScreen onClose={() => setDeviceModalVisible(false)} />
+    </Modal>
+    </>
   );
 }
 

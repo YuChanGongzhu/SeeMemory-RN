@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
   View,
   Text,
@@ -8,17 +8,15 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
-  ScrollView,
   Alert,
   Image,
   Modal,
   Pressable,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {useOpenClawChat} from '../hooks/useOpenClawChat';
+import {useHermesChat} from '../hooks/useHermesChat';
 import {pickImageFromLibrary} from '../native/ImagePickerModule';
-import type {ChatMessage, SessionListItem} from '../openclaw/types';
+import type {ChatMessage} from '../types/chat';
 import {ChatComposerDraftStore, type ChatComposerDraft} from '../storage/ChatComposerDraftStore';
 import {useTheme} from './ThemeProvider';
 import type {Theme} from './index';
@@ -50,6 +48,33 @@ function normalizeBubbleText(text: string): string {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Matches any http(s) URL run. Trailing sentence punctuation is stripped separately
+// so links like "...jpg。" or "(...jpg)" still resolve to a clean media URL.
+const URL_SCAN_REGEX = /(https?:\/\/[^\s]+)/g;
+const TRAILING_PUNCT_REGEX = /[)\]}>"'.,;:!?。，、；：！？）】》「」“”]+$/;
+
+// Splits free-form text into parts, turning any inline image/audio URL into a media
+// part (regardless of role). Non-media URLs are left inside the surrounding text.
+function pushTextWithInlineMedia(parts: BubblePart[], rawText: string): void {
+  const normalized = normalizeBubbleText(rawText.replace(/[ \t]+\n/g, '\n'));
+  if (!normalized) return;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  URL_SCAN_REGEX.lastIndex = 0;
+  while ((match = URL_SCAN_REGEX.exec(normalized)) !== null) {
+    const cleanedUrl = match[1].replace(TRAILING_PUNCT_REGEX, '');
+    const kind = detectMediaKind(cleanedUrl);
+    if (!kind) continue;
+    const before = normalized.slice(lastIndex, match.index).trim();
+    if (before) parts.push({type: 'text', content: before});
+    parts.push(kind === 'image' ? {type: 'image', url: cleanedUrl} : {type: 'audio', url: cleanedUrl});
+    lastIndex = match.index + cleanedUrl.length;
+  }
+  const rest = normalized.slice(lastIndex).trim();
+  if (rest) parts.push({type: 'text', content: rest});
+}
+
 function buildBubbleParts(text: string, role: ChatMessage['role']): BubblePart[] {
   const firstLine = text.split('\n')[0]?.trim() || '';
   const workingText =
@@ -61,8 +86,7 @@ function buildBubbleParts(text: string, role: ChatMessage['role']): BubblePart[]
   let textBuffer: string[] = [];
 
   const flushTextBuffer = () => {
-    const combined = normalizeBubbleText(textBuffer.join('\n').replace(/[ \t]+\n/g, '\n'));
-    if (combined) parts.push({type: 'text', content: combined});
+    pushTextWithInlineMedia(parts, textBuffer.join('\n'));
     textBuffer = [];
   };
 
@@ -94,24 +118,13 @@ export function MemoryScreen() {
   const [inputText, setInputText] = useState('');
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [pendingComposerDraft, setPendingComposerDraft] = useState<ChatComposerDraft | null>(null);
-  const [debugMessage, setDebugMessage] = useState<ChatMessage | null>(null);
-  const [isManagerExpanded, setIsManagerExpanded] = useState(false);
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
-  const listViewportHeightRef = useRef(0);
-  const listContentHeightRef = useRef(0);
   const shouldStickToBottomRef = useRef(true);
   const hasAppliedInitialScrollRef = useRef(false);
   const activeAutoSendDraftKeyRef = useRef<string | null>(null);
-  const debugTapRef = useRef<{messageId: string | null; count: number; timer: ReturnType<typeof setTimeout> | null}>({
-    messageId: null, count: 0, timer: null,
-  });
 
-  const {
-    settings, draftSessionKey, activeSessionKey, sessions, isHydrated,
-    connectionState, statusText, messages, isSending, isUploadingImage,
-    updateSetting, setDraftSessionKey, connect, disconnect, createSession, createSessionWithKey,
-    selectSession, refreshSessions, sendMessage, sendImageMessage,
-  } = useOpenClawChat();
+  const {selectedDevice, messages, isSending, isUploadingImage, send, sendImageMessage, reset} =
+    useHermesChat();
 
   useEffect(() => {
     let active = true;
@@ -124,6 +137,7 @@ export function MemoryScreen() {
     return () => { active = false; unsubscribe(); };
   }, []);
 
+  // Auto-send drafts produced by ring-audio transcription on the Devices tab.
   useEffect(() => {
     if (!pendingComposerDraft) return;
     const draftText = buildDraftMessage(pendingComposerDraft).trim();
@@ -134,7 +148,7 @@ export function MemoryScreen() {
       void ChatComposerDraftStore.clear();
       return;
     }
-    if (connectionState !== 'connected' || isSending || isUploadingImage) return;
+    if (!selectedDevice || isSending || isUploadingImage) return;
     if (activeAutoSendDraftKeyRef.current === draftKey) return;
     let cancelled = false;
     activeAutoSendDraftKeyRef.current = draftKey;
@@ -142,7 +156,7 @@ export function MemoryScreen() {
       setPendingComposerDraft(current => current && buildDraftKey(current) === draftKey ? null : current);
       await ChatComposerDraftStore.clear();
       setInputText('');
-      const sent = await sendMessage(draftText);
+      const sent = await send(draftText);
       if (cancelled) {
         if (activeAutoSendDraftKeyRef.current === draftKey) activeAutoSendDraftKeyRef.current = null;
         return;
@@ -152,21 +166,20 @@ export function MemoryScreen() {
       setInputText(current => current.trim() ? current : draftText);
     })();
     return () => { cancelled = true; };
-  }, [connectionState, isSending, isUploadingImage, pendingComposerDraft, sendMessage]);
+  }, [selectedDevice, isSending, isUploadingImage, pendingComposerDraft, send]);
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
     hasAppliedInitialScrollRef.current = false;
-  }, [activeSessionKey]);
+  }, [selectedDevice?.subDomain]);
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
     const messageToSend = inputText;
     shouldStickToBottomRef.current = true;
     setInputText('');
-    const sent = await sendMessage(messageToSend);
-    if (sent) { setInputText(''); return; }
-    setInputText(messageToSend);
+    const sent = await send(messageToSend);
+    if (!sent) setInputText(messageToSend);
   };
 
   const handlePickImage = async () => {
@@ -181,47 +194,9 @@ export function MemoryScreen() {
     }
   };
 
-  const isConnected = connectionState === 'connected';
-  const canSend = isConnected && !isSending && !isUploadingImage && !!inputText.trim();
-  const canPickImage = isConnected && !isSending && !isUploadingImage;
-
-  const statusColor = useMemo(() => {
-    switch (connectionState) {
-      case 'connected': return theme.colors.statusConnected;
-      case 'connecting': case 'loading': return theme.colors.statusConnecting;
-      case 'error': return theme.colors.statusError;
-      default: return theme.colors.statusOffline;
-    }
-  }, [connectionState, theme]);
-
-  const handleDebugTap = (item: ChatMessage) => {
-    if (item.role !== 'assistant' || !item.debugRaw) return;
-    if (debugTapRef.current.timer) clearTimeout(debugTapRef.current.timer);
-    if (debugTapRef.current.messageId === item.id) {
-      debugTapRef.current.count += 1;
-    } else {
-      debugTapRef.current.messageId = item.id;
-      debugTapRef.current.count = 1;
-    }
-    if (debugTapRef.current.count >= 5) {
-      debugTapRef.current.messageId = null;
-      debugTapRef.current.count = 0;
-      debugTapRef.current.timer = null;
-      setDebugMessage(item);
-      return;
-    }
-    debugTapRef.current.timer = setTimeout(() => {
-      debugTapRef.current.messageId = null;
-      debugTapRef.current.count = 0;
-      debugTapRef.current.timer = null;
-    }, 1400);
-  };
-
-  const debugText = useMemo(() => {
-    if (!debugMessage?.debugRaw) return '';
-    try { return JSON.stringify(debugMessage.debugRaw, null, 2); }
-    catch { return String(debugMessage.debugRaw); }
-  }, [debugMessage]);
+  const hasDevice = !!selectedDevice;
+  const canSend = hasDevice && !isSending && !isUploadingImage && !!inputText.trim();
+  const canPickImage = hasDevice && !isSending && !isUploadingImage;
 
   const s = theme.spacing;
   const r = theme.radius;
@@ -232,344 +207,73 @@ export function MemoryScreen() {
     });
   };
 
-  const handleToggleManager = () => {
-    setIsManagerExpanded(current => !current);
-  };
-
-  const handleCreateNewSession = async () => {
-    const nextKey = `new-${Date.now().toString(36).slice(-6)}`;
-    setDraftSessionKey(nextKey);
-    setIsManagerExpanded(true);
-    await createSessionWithKey(nextKey);
-  };
-
-  const managerPanel = (
-    <Modal
-      visible={isManagerExpanded}
-      animationType="slide"
-      transparent
-      onRequestClose={handleToggleManager}>
-      <Pressable
-        style={[localStyles.previewOverlay, {backgroundColor: 'rgba(3, 6, 18, 0.72)', justifyContent: 'flex-end'}]}
-        onPress={handleToggleManager}>
-        <Pressable
-          style={[localStyles.managerModalCard, {
-            backgroundColor: theme.colors.bgCard,
-            borderTopLeftRadius: r.xl,
-            borderTopRightRadius: r.xl,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            maxHeight: '82%',
-          }]}
-          onPress={() => {}}>
-          <ScrollView
-            style={{width: '100%'}}
-            contentContainerStyle={{paddingHorizontal: s.md, paddingTop: s.md, paddingBottom: s.xl}}
-            showsVerticalScrollIndicator={false}>
-        <View style={[localStyles.managerHeader, {marginBottom: s.md}]}>
-          <View style={localStyles.managerHeaderCopy}>
-            <Text style={[localStyles.managerTitle, {color: theme.colors.text}]}>管理面板</Text>
-            <Text style={[localStyles.managerSubtitle, {color: theme.colors.textSecondary}]}>
-              把当前会话、历史会话和连接配置放在同一处管理。
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[localStyles.managerCollapseButton, {
-              backgroundColor: theme.colors.bgSecondary,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              borderRadius: r.pill,
-            }]}
-            onPress={handleToggleManager}>
-            <Text style={[localStyles.managerCollapseButtonText, {color: theme.colors.text}]}>收起面板</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={[localStyles.managerSection, {
-          backgroundColor: theme.colors.bgSecondary,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          borderRadius: r.lg,
-          marginBottom: s.md,
-        }]}>
-          <View style={[localStyles.statusRow, {marginBottom: s.md}]}>
-            <View style={[localStyles.statusDot, {backgroundColor: statusColor}]} />
-            <Text style={[localStyles.statusText, {color: theme.colors.textSecondary}]}>{statusText}</Text>
-          </View>
-
-          <Text style={[localStyles.sectionLabel, {color: theme.mode === 'neon' ? theme.colors.accent : theme.colors.textMuted, marginBottom: s.sm}]}>网关地址</Text>
-          <TextInput
-            style={[localStyles.configInput, {
-              backgroundColor: theme.colors.input,
-              borderWidth: 1,
-              borderColor: theme.colors.inputBorder,
-              borderRadius: r.md,
-              paddingHorizontal: s.sm + 4,
-              paddingVertical: s.sm + 2,
-              color: theme.colors.text,
-              fontSize: 13,
-            }]}
-            placeholder="ws://43.136.45.132:18789"
-            placeholderTextColor={theme.colors.textMuted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={settings.url}
-            onChangeText={value => updateSetting('url', value)}
-          />
-
-          <Text style={[localStyles.sectionLabel, {color: theme.mode === 'neon' ? theme.colors.accent : theme.colors.textMuted, marginBottom: s.sm, marginTop: s.sm}]}>访问令牌</Text>
-          <TextInput
-            style={[localStyles.configInput, {
-              backgroundColor: theme.colors.input,
-              borderWidth: 1,
-              borderColor: theme.colors.inputBorder,
-              borderRadius: r.md,
-              paddingHorizontal: s.sm + 4,
-              paddingVertical: s.sm + 2,
-              color: theme.colors.text,
-              fontSize: 13,
-            }]}
-            placeholder="demo-token-123"
-            placeholderTextColor={theme.colors.textMuted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={settings.token}
-            onChangeText={value => updateSetting('token', value)}
-          />
-
-          <View style={[localStyles.actionRow, {gap: s.sm, marginTop: s.md}]}>
-            <TouchableOpacity
-              style={[localStyles.primaryAction, {
-                flex: 1,
-                backgroundColor: theme.colors.buttonPrimary,
-                borderWidth: theme.mode === 'warm' ? 0 : 1,
-                borderColor: theme.mode === 'warm' ? 'transparent' : theme.colors.borderAccent,
-                borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-                paddingVertical: s.sm + 4,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }]}
-              disabled={!isHydrated || connectionState === 'connecting'}
-              onPress={connect}>
-              {connectionState === 'connecting' ? (
-                <ActivityIndicator size="small" color={theme.colors.buttonPrimaryText} />
-              ) : (
-                <Text style={[localStyles.primaryActionText, {color: theme.colors.buttonPrimaryText, fontWeight: '700', fontSize: 13}]}>
-                  {isConnected ? '重新连接' : '连接'}
-                </Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[localStyles.secondaryAction, {
-                flex: 1,
-                backgroundColor: theme.colors.bgCard,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-                paddingVertical: s.sm + 4,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }]}
-              disabled={!isConnected}
-              onPress={disconnect}>
-              <Text style={[localStyles.secondaryActionText, {color: theme.colors.text, fontSize: 13}]}>断开</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={[localStyles.managerSection, {
-          backgroundColor: theme.colors.bgSecondary,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          borderRadius: r.lg,
-          marginBottom: s.md,
-        }]}>
-          <View style={[localStyles.sessionListHeader, {marginBottom: s.sm}]}>
-            <Text style={[localStyles.aiTitle, {color: theme.colors.text}]}>会话列表</Text>
-            <TouchableOpacity onPress={refreshSessions} disabled={!isConnected}>
-              <Text style={[localStyles.refreshLinkText, {color: theme.colors.accent}]}>刷新</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={[localStyles.sessionListStack, {gap: s.sm}]}>
-            {sessions.map(item => (
-              <SessionChip key={item.key} item={item} active={item.key === activeSessionKey} onPress={selectSession} theme={theme} />
-            ))}
-          </View>
-        </View>
-
-        <View style={[localStyles.managerSection, {
-          backgroundColor: theme.colors.bgSecondary,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          borderRadius: r.lg,
-          marginBottom: s.md,
-        }]}>
-          <Text style={[localStyles.managerSectionLabel, {color: theme.colors.textMuted}]}>新开会话</Text>
-          <Text style={[localStyles.managerSectionHint, {color: theme.colors.textSecondary}]}>
-            你可以快速生成一个新的 `sessionKey`，也可以自定义名字后进入。
-          </Text>
-          <View style={[localStyles.sessionCreateRow, {gap: s.sm, marginTop: s.sm}]}>
-            <TextInput
-              style={[localStyles.configInput, localStyles.sessionInput, {
-                backgroundColor: theme.colors.input,
-                borderWidth: 1,
-                borderColor: theme.colors.inputBorder,
-                borderRadius: r.md,
-                paddingHorizontal: s.sm + 4,
-                paddingVertical: s.sm + 2,
-                color: theme.colors.text,
-                fontSize: 13,
-              }]}
-              placeholder="new-project"
-              placeholderTextColor={theme.colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={draftSessionKey}
-              onChangeText={setDraftSessionKey}
-            />
-          </View>
-          <View style={[localStyles.managerButtonRow, {gap: s.sm, marginTop: s.sm}]}>
-            <TouchableOpacity
-              style={[localStyles.managerActionButton, {
-                backgroundColor: theme.colors.buttonPrimary,
-                borderWidth: theme.mode === 'warm' ? 0 : 1,
-                borderColor: theme.colors.borderAccent,
-                borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-              }]}
-              onPress={handleCreateNewSession}>
-              <Text style={[localStyles.newSessionButtonText, {color: theme.colors.buttonPrimaryText}]}>快速新建</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[localStyles.managerActionButton, {
-                backgroundColor: theme.colors.bgCard,
-                borderWidth: 1,
-                borderColor: theme.colors.borderAccent,
-                borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-              }]}
-              onPress={createSession}>
-              <Text style={[localStyles.newSessionButtonText, {color: theme.colors.accent}]}>使用当前 key</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-
   return (
     <KeyboardAvoidingView style={[localStyles.container, {backgroundColor: theme.colors.bg}]} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={100}>
       {/* Header */}
       <View style={[localStyles.header, {paddingTop: insets.top + s.md, backgroundColor: theme.colors.bg, borderBottomColor: theme.colors.border}]}>
-        <View>
+        <View style={{flex: 1, paddingRight: s.sm}}>
           {theme.mode === 'neon' && <Text style={[localStyles.titleNeon, {color: theme.colors.accent}]}>记忆链路</Text>}
           {theme.mode === 'warm' && <Text style={[localStyles.titleWarm, {color: theme.colors.accent}]}>记忆之树</Text>}
-          <Text style={[localStyles.subtitle, {color: theme.colors.textSecondary}]}>
-            {theme.mode === 'warm' ? 'Memory Tree' : '// 智能会话通道'}
+          <Text style={[localStyles.subtitle, {color: theme.colors.textSecondary}]} numberOfLines={1}>
+            {hasDevice ? (selectedDevice?.name || selectedDevice?.subDomain) : (theme.mode === 'warm' ? '未选择记忆盒子' : '// 未连接记忆盒子')}
           </Text>
         </View>
-        <Text style={localStyles.recordIcon}>
-          {theme.mode === 'warm' ? '🌿' : '◉'}
-        </Text>
+        <TouchableOpacity
+          style={{
+            paddingHorizontal: s.sm + 2,
+            paddingVertical: s.xs + 2,
+            borderRadius: r.pill,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.bgCard,
+          }}
+          onPress={reset}
+          disabled={messages.length === 0}>
+          <Text style={{color: messages.length === 0 ? theme.colors.textMuted : theme.colors.accent, fontSize: 12, fontWeight: '600'}}>
+            新对话
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      <View style={[localStyles.quickBar, {
-        backgroundColor: theme.colors.bgSecondary,
-        borderBottomColor: theme.colors.border,
-        paddingHorizontal: s.md,
-        paddingVertical: s.sm,
-        gap: s.sm,
-      }]}>
-        <TouchableOpacity
-          style={[localStyles.quickBarButton, {
-            backgroundColor: isManagerExpanded ? (theme.colors.accentGlow || theme.colors.bgCard) : theme.colors.bgCard,
-            borderColor: isManagerExpanded ? theme.colors.accent : theme.colors.border,
-            borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-          }]}
-          onPress={handleToggleManager}>
-          <Text style={[localStyles.quickBarButtonText, {color: theme.colors.text}]}>
-            {isManagerExpanded ? '收起面板' : '管理面板'}
+      {!hasDevice ? (
+        <View style={[localStyles.noDeviceBanner, {backgroundColor: theme.colors.bgSecondary, borderBottomColor: theme.colors.border, paddingHorizontal: s.md, paddingVertical: s.sm}]}>
+          <Text style={{color: theme.colors.textSecondary, fontSize: 12}}>
+            还没有选择记忆盒子，请到「设置 · 记忆盒子」中选择后再开始对话。
           </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[localStyles.quickBarButton, {
-            backgroundColor: theme.colors.buttonPrimary,
-            borderColor: theme.colors.borderAccent,
-            borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-          }]}
-          onPress={handleCreateNewSession}>
-          <Text style={[localStyles.quickBarButtonText, {color: theme.colors.buttonPrimaryText}]}>
-            新开会话
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[localStyles.quickSessionChip, {
-            flex: 1,
-            backgroundColor: theme.colors.bgCard,
-            borderColor: theme.colors.borderAccent,
-            borderRadius: r.pill,
-          }]}
-          onPress={() => {
-            if (!isManagerExpanded) {
-              setIsManagerExpanded(true);
-            }
-          }}>
-          <Text
-            numberOfLines={1}
-            style={[localStyles.quickSessionText, {
-              color: theme.colors.accent,
-            }]}>
-            {activeSessionKey}
-          </Text>
-        </TouchableOpacity>
-      </View>
+        </View>
+      ) : null}
 
       <FlatList
         ref={listRef}
         data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={[localStyles.list, {padding: s.md, gap: s.sm + 4}]}
-        onLayout={event => {
-          listViewportHeightRef.current = event.nativeEvent.layout.height;
-        }}
         onScroll={event => {
           const {contentOffset, layoutMeasurement, contentSize} = event.nativeEvent;
-          const distanceFromBottom =
-            contentSize.height - (contentOffset.y + layoutMeasurement.height);
+          const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
           shouldStickToBottomRef.current = distanceFromBottom < 80;
         }}
         scrollEventThrottle={16}
-        onContentSizeChange={(_, contentHeight) => {
-          const previousHeight = listContentHeightRef.current;
-          listContentHeightRef.current = contentHeight;
+        onContentSizeChange={() => {
           if (!hasAppliedInitialScrollRef.current) {
             hasAppliedInitialScrollRef.current = true;
             scrollToBottom(false);
             return;
           }
-
-          if (contentHeight <= previousHeight) {
-            return;
-          }
-
           if (shouldStickToBottomRef.current) {
             scrollToBottom(true);
           }
         }}
         ListHeaderComponent={<View style={{height: s.xs}} />}
         renderItem={({item}) => (
-          <ChatBubble item={item} onPreviewImage={setPreviewImageUrl} onDebugTap={handleDebugTap} theme={theme} />
+          <ChatBubble item={item} onPreviewImage={setPreviewImageUrl} theme={theme} />
         )}
         ListEmptyComponent={
-          isHydrated ? (
-            <Text style={[localStyles.emptyText, {color: theme.colors.textMuted, textAlign: 'center', marginTop: s.xl}]}>
-              {'连接成功后就可以开始演示对话了'}
-            </Text>
-          ) : null
+          <Text style={[localStyles.emptyText, {color: theme.colors.textMuted, textAlign: 'center', marginTop: s.xl}]}>
+            {hasDevice ? '和你的记忆盒子聊聊吧，它会帮你召回记忆。' : ''}
+          </Text>
         }
       />
-
-      {managerPanel}
 
       {/* Input Area */}
       <View style={[localStyles.inputContainer, {
@@ -595,9 +299,7 @@ export function MemoryScreen() {
           }]}
           onPress={handlePickImage}
           disabled={!canPickImage}>
-          <Text style={{color: canPickImage ? theme.colors.accent : theme.colors.textMuted, fontSize: 16}}>
-            {theme.mode === 'warm' ? '📷' : '📷'}
-          </Text>
+          <Text style={{color: canPickImage ? theme.colors.accent : theme.colors.textMuted, fontSize: 16}}>📷</Text>
         </TouchableOpacity>
         <TextInput
           style={[localStyles.input, {
@@ -614,12 +316,12 @@ export function MemoryScreen() {
             minHeight: 40,
             maxHeight: 100,
           }]}
-          placeholder={isConnected ? ('输入消息开始演示...') : ('请先连接 Gateway')}
+          placeholder={hasDevice ? '输入消息，召回你的记忆...' : '请先在设置中选择记忆盒子'}
           placeholderTextColor={theme.colors.textMuted}
           value={inputText}
           onChangeText={setInputText}
           onSubmitEditing={handleSend}
-          editable={isConnected && !isSending && !isUploadingImage}
+          editable={hasDevice && !isSending && !isUploadingImage}
           multiline
         />
         <TouchableOpacity
@@ -634,12 +336,11 @@ export function MemoryScreen() {
             minWidth: 60,
             alignItems: 'center',
             opacity: canSend ? 1 : 0.5,
-            ...(theme.mode === 'neon' && canSend ? {shadowColor: theme.colors.accent, shadowOffset: {width: 0, height: 0}, shadowOpacity: 0.4, shadowRadius: 10} : {}),
           }]}
           onPress={handleSend}
           disabled={!canSend}>
           <Text style={[localStyles.sendBtnText, {color: theme.colors.buttonPrimaryText, fontSize: 13, fontWeight: '700'}]}>
-            {isUploadingImage ? '...' : isSending ? '...' : ('发送')}
+            {isUploadingImage || isSending ? '...' : '发送'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -649,27 +350,8 @@ export function MemoryScreen() {
         <Pressable style={[localStyles.previewOverlay, {backgroundColor: 'rgba(0, 0, 0, 0.92)', flex: 1, alignItems: 'center', justifyContent: 'center', padding: s.lg}]} onPress={() => setPreviewImageUrl(null)}>
           <Pressable style={{width: '100%', alignItems: 'center', justifyContent: 'center'}} onPress={() => {}}>
             {previewImageUrl && <Image source={{uri: previewImageUrl}} style={{width: '100%', height: '78%', maxHeight: 600, backgroundColor: '#111', borderRadius: r.lg}} resizeMode="contain" />}
-            <TouchableOpacity style={[localStyles.previewCloseButton, {marginTop: s.md, paddingHorizontal: s.md + 4, paddingVertical: s.sm + 2, borderRadius: 999, backgroundColor: theme.colors.bgCard, borderWidth: 1, borderColor: undefined}]} onPress={() => setPreviewImageUrl(null)}>
+            <TouchableOpacity style={[localStyles.previewCloseButton, {marginTop: s.md, paddingHorizontal: s.md + 4, paddingVertical: s.sm + 2, borderRadius: 999, backgroundColor: theme.colors.bgCard}]} onPress={() => setPreviewImageUrl(null)}>
               <Text style={[localStyles.previewCloseText, {color: theme.colors.text}]}>✕</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Debug Modal */}
-      <Modal visible={!!debugMessage} animationType="slide" transparent onRequestClose={() => setDebugMessage(null)}>
-        <Pressable style={[localStyles.previewOverlay, {backgroundColor: 'rgba(0, 0, 0, 0.92)', flex: 1, alignItems: 'center', justifyContent: 'center', padding: s.lg}]} onPress={() => setDebugMessage(null)}>
-          <Pressable style={[localStyles.debugCard, {width: '92%', maxWidth: 520, maxHeight: '82%', backgroundColor: theme.colors.bgCard, borderRadius: r.lg, padding: s.md, borderWidth: 1, borderColor: theme.colors.border}]} onPress={() => {}}>
-            <Text style={[localStyles.debugModalTitle, {color: theme.colors.text, fontSize: 14, fontWeight: '700', marginBottom: s.sm, textTransform: 'none' as const}]}>
-              原始响应 · {debugMessage?.debugSource === 'history' ? '历史' : '事件'}
-            </Text>
-            <ScrollView style={{width: '100%', maxHeight: '86%'}} contentContainerStyle={{paddingBottom: s.sm}}>
-              <Text selectable style={[localStyles.debugModalText, {color: theme.colors.textSecondary, fontSize: 11, lineHeight: 16, fontFamily: theme.fonts.mono}]}>
-                {debugText}
-              </Text>
-            </ScrollView>
-            <TouchableOpacity style={[localStyles.previewCloseButton, {marginTop: s.md, paddingHorizontal: s.md + 4, paddingVertical: s.sm + 2, borderRadius: 999, backgroundColor: theme.colors.bgSecondary, alignSelf: 'center'}]} onPress={() => setDebugMessage(null)}>
-              <Text style={[localStyles.previewCloseText, {color: theme.colors.text}]}>关闭</Text>
             </TouchableOpacity>
           </Pressable>
         </Pressable>
@@ -678,43 +360,7 @@ export function MemoryScreen() {
   );
 }
 
-function SessionChip({item, active, onPress, theme}: {item: SessionListItem; active: boolean; onPress: (key: string) => void; theme: Theme}) {
-  const r = theme.radius;
-  const s = theme.spacing;
-  return (
-    <TouchableOpacity
-      style={[localStyles.sessionRow, {
-        backgroundColor: active
-          ? (theme.mode === 'neon' ? 'rgba(0, 245, 255, 0.15)' : theme.mode === 'warm' ? 'rgba(255, 112, 67, 0.15)' : 'rgba(201, 169, 98, 0.15)')
-          : theme.colors.bgSecondary,
-        borderRadius: r.pill,
-        borderWidth: 1,
-        borderColor: active ? theme.colors.accent : theme.colors.border,
-        paddingHorizontal: s.sm + 4,
-        paddingVertical: s.sm + 2,
-      }]}
-      onPress={() => onPress(item.key)}>
-      <View style={localStyles.sessionRowCopy}>
-        <Text style={{color: active ? theme.colors.accent : theme.colors.text, fontSize: 13, fontWeight: '700'}}>
-          {item.title || item.key}
-        </Text>
-        <Text style={{color: theme.colors.textSecondary, fontSize: 11, marginTop: 2}}>
-          {item.key}
-        </Text>
-      </View>
-      <View style={[localStyles.sessionRowBadge, {
-        backgroundColor: active ? theme.colors.accent : theme.colors.bgCard,
-        borderColor: active ? theme.colors.accent : theme.colors.border,
-      }]}>
-        <Text style={{color: active ? theme.colors.buttonPrimaryText : theme.colors.textSecondary, fontSize: 10, fontWeight: '700'}}>
-          {active ? '当前' : '切换'}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-function ChatBubble({item, onPreviewImage, onDebugTap, theme}: {item: ChatMessage; onPreviewImage: (url: string) => void; onDebugTap: (item: ChatMessage) => void; theme: Theme}) {
+function ChatBubble({item, onPreviewImage, theme}: {item: ChatMessage; onPreviewImage: (url: string) => void; theme: Theme}) {
   const isUser = item.role === 'user';
   const isSystem = item.role === 'system';
   const isAssistant = item.role === 'assistant';
@@ -736,12 +382,10 @@ function ChatBubble({item, onPreviewImage, onDebugTap, theme}: {item: ChatMessag
         paddingHorizontal: s.sm + 6,
         paddingVertical: s.sm + 2,
         marginBottom: s.sm,
-      }}
-      onStartShouldSetResponder={() => isAssistant}
-      onResponderRelease={() => { if (isAssistant) onDebugTap(item); }}>
+      }}>
       {parts.map((part, index) =>
         part.type === 'image' ? (
-          <TouchableOpacity key={`${part.url}-${index}`} activeOpacity={0.9} onPress={() => { onDebugTap(item); onPreviewImage(part.url); }}>
+          <TouchableOpacity key={`${part.url}-${index}`} activeOpacity={0.9} onPress={() => onPreviewImage(part.url)}>
             <Image source={{uri: part.url}} style={{width: 160, height: 160, borderRadius: r.md, marginBottom: 8, backgroundColor: '#111'}} resizeMode="cover" />
           </TouchableOpacity>
         ) : part.type === 'audio' ? (
@@ -750,7 +394,7 @@ function ChatBubble({item, onPreviewImage, onDebugTap, theme}: {item: ChatMessag
             <Text selectable style={{color: isUser ? '#FFF' : theme.colors.textSecondary, fontSize: 11}}>{part.url}</Text>
           </View>
         ) : (
-          <Text key={`${part.content.slice(0, 24)}-${index}`} style={{color: isUser ? (theme.mode === 'warm' ? '#FFF' : '#FFF') : isSystem ? theme.colors.textSecondary : theme.colors.text, fontSize: 14, lineHeight: 20}}>
+          <Text key={`${part.content.slice(0, 24)}-${index}`} style={{color: isUser ? '#FFF' : isSystem ? theme.colors.textSecondary : theme.colors.text, fontSize: 14, lineHeight: 20}}>
             {part.content}
             {item.isStreaming && lastTextPartIndex === index ? '▋' : ''}
           </Text>
@@ -766,69 +410,11 @@ function ChatBubble({item, onPreviewImage, onDebugTap, theme}: {item: ChatMessag
 const localStyles = StyleSheet.create({
   container: {flex: 1},
   header: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1},
-  quickBar: {borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center'},
-  managerPanelWrap: {},
-  managerModalCard: {width: '100%', alignSelf: 'center'},
-  managerHeader: {flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between'},
-  managerHeaderCopy: {flex: 1, paddingRight: 12},
-  managerTitle: {fontSize: 16, fontWeight: '700'},
-  managerSubtitle: {fontSize: 12, lineHeight: 18, marginTop: 4},
-  managerCollapseButton: {paddingHorizontal: 12, paddingVertical: 8},
-  managerCollapseButtonText: {fontSize: 12, fontWeight: '700'},
-  managerSection: {padding: 12},
-  managerSectionLabel: {fontSize: 11, fontWeight: '700', marginBottom: 6},
-  managerSectionHint: {fontSize: 12, lineHeight: 18},
-  activeSessionValue: {fontSize: 18, fontWeight: '700'},
-  activeSessionHint: {fontSize: 12, lineHeight: 18, marginTop: 6},
-  managerButtonRow: {flexDirection: 'row'},
-  managerActionButton: {flex: 1, paddingHorizontal: 12, paddingVertical: 10, alignItems: 'center', justifyContent: 'center'},
-  quickBarButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    minHeight: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  quickBarButtonText: {fontSize: 12, fontWeight: '700'},
-  quickSessionChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderWidth: 1,
-    minWidth: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickSessionText: {fontSize: 11, fontWeight: '600'},
+  noDeviceBanner: {borderBottomWidth: 1},
   titleNeon: {fontSize: 18, fontWeight: '700', letterSpacing: 2},
   titleWarm: {fontSize: 20, fontWeight: '700'},
-  titleLuxury: {fontSize: 22, fontWeight: '400', letterSpacing: 6, fontFamily: 'Georgia'},
   subtitle: {fontSize: 11, marginTop: 4},
-  recordIcon: {fontSize: 18},
   list: {paddingBottom: 16},
-  configCard: {},
-  statusRow: {flexDirection: 'row', alignItems: 'center'},
-  statusDot: {width: 8, height: 8, borderRadius: 999, marginRight: 8},
-  statusText: {fontSize: 12},
-  sectionLabel: {fontSize: 11, marginBottom: 4},
-  configInput: {},
-  sessionCreateRow: {flexDirection: 'row', alignItems: 'center'},
-  sessionInput: {flex: 1},
-  newSessionButton: {},
-  newSessionButtonText: {fontSize: 12, fontWeight: '700'},
-  sessionHint: {},
-  actionRow: {flexDirection: 'row'},
-  primaryAction: {},
-  primaryActionText: {},
-  secondaryAction: {},
-  secondaryActionText: {},
-  sessionListHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  sessionListStack: {},
-  sessionRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  sessionRowCopy: {flex: 1, paddingRight: 12},
-  sessionRowBadge: {paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1},
-  aiTitle: {fontSize: 13, fontWeight: '600'},
-  refreshLinkText: {fontWeight: '600'},
   emptyText: {},
   inputContainer: {},
   mediaBtn: {},
@@ -838,7 +424,4 @@ const localStyles = StyleSheet.create({
   previewOverlay: {},
   previewCloseButton: {},
   previewCloseText: {fontSize: 13, fontWeight: '600'},
-  debugCard: {},
-  debugModalTitle: {},
-  debugModalText: {},
 });

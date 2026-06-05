@@ -8,12 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
-		2B11A001D31C4E10A1000001 /* RingMemoryApp/RTNRingModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */; };
-		2B11A001D31C4E10A1000002 /* RingMemoryApp/RTNRingModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */; };
+		2B11A001D31C4E10A1000001 /* RTNRingModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000011 /* RTNRingModule.swift */; };
+		2B11A001D31C4E10A1000002 /* RTNRingModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000012 /* RTNRingModule.mm */; };
 		2B11A001D31C4E10A1000003 /* BCLRingSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000013 /* BCLRingSDK.xcframework */; };
 		2B11A001D31C4E10A1000004 /* BCLRingSDK.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 2B11A001D31C4E10A1000013 /* BCLRingSDK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		2B11A002D31C4E10A1000001 /* RingMemoryApp/ImagePickerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */; };
-		2B11A002D31C4E10A1000002 /* RingMemoryApp/ImagePickerModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */; };
+		2B11A002D31C4E10A1000001 /* ImagePickerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000011 /* ImagePickerModule.swift */; };
+		2B11A002D31C4E10A1000002 /* ImagePickerModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B11A002D31C4E10A1000012 /* ImagePickerModule.mm */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		7E920A28E5ACACD61F4F6674 /* Pods_RingMemoryApp.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CAB683D5D921B81CF7407D77 /* Pods_RingMemoryApp.framework */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -39,11 +39,11 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = RingMemoryApp/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = RingMemoryApp/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = RingMemoryApp/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/RTNRingModule.swift; sourceTree = "<group>"; };
-		2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/RTNRingModule.mm; sourceTree = "<group>"; };
+		2B11A001D31C4E10A1000011 /* RTNRingModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/RTNRingModule.swift; sourceTree = "<group>"; };
+		2B11A001D31C4E10A1000012 /* RTNRingModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/RTNRingModule.mm; sourceTree = "<group>"; };
 		2B11A001D31C4E10A1000013 /* BCLRingSDK.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:M5T47WSVG3:BRAVECHIPTECHCoLtd"; lastKnownFileType = wrapper.xcframework; path = BCLRingSDK.xcframework; sourceTree = "<group>"; };
-		2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/ImagePickerModule.swift; sourceTree = "<group>"; };
-		2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/ImagePickerModule.mm; sourceTree = "<group>"; };
+		2B11A002D31C4E10A1000011 /* ImagePickerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingMemoryApp/ImagePickerModule.swift; sourceTree = "<group>"; };
+		2B11A002D31C4E10A1000012 /* ImagePickerModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RingMemoryApp/ImagePickerModule.mm; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-RingMemoryApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RingMemoryApp.debug.xcconfig"; path = "Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp.debug.xcconfig"; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-RingMemoryApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RingMemoryApp.release.xcconfig"; path = "Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp.release.xcconfig"; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = RingMemoryApp/AppDelegate.swift; sourceTree = "<group>"; };
@@ -70,10 +70,10 @@
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
-				2B11A002D31C4E10A1000012 /* RingMemoryApp/ImagePickerModule.mm */,
-				2B11A002D31C4E10A1000011 /* RingMemoryApp/ImagePickerModule.swift */,
-				2B11A001D31C4E10A1000012 /* RingMemoryApp/RTNRingModule.mm */,
-				2B11A001D31C4E10A1000011 /* RingMemoryApp/RTNRingModule.swift */,
+				2B11A002D31C4E10A1000012 /* ImagePickerModule.mm */,
+				2B11A002D31C4E10A1000011 /* ImagePickerModule.swift */,
+				2B11A001D31C4E10A1000012 /* RTNRingModule.mm */,
+				2B11A001D31C4E10A1000011 /* RTNRingModule.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -223,13 +223,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -244,13 +240,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-RingMemoryApp/Pods-RingMemoryApp-resources-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -287,10 +279,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
-				2B11A002D31C4E10A1000002 /* RingMemoryApp/ImagePickerModule.mm in Sources */,
-				2B11A002D31C4E10A1000001 /* RingMemoryApp/ImagePickerModule.swift in Sources */,
-				2B11A001D31C4E10A1000002 /* RingMemoryApp/RTNRingModule.mm in Sources */,
-				2B11A001D31C4E10A1000001 /* RingMemoryApp/RTNRingModule.swift in Sources */,
+				2B11A002D31C4E10A1000002 /* ImagePickerModule.mm in Sources */,
+				2B11A002D31C4E10A1000001 /* ImagePickerModule.swift in Sources */,
+				2B11A001D31C4E10A1000002 /* RTNRingModule.mm in Sources */,
+				2B11A001D31C4E10A1000001 /* RTNRingModule.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2,8 +2,11 @@ import UIKit
 import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
+// Rokid SDK is device-only; excluded from Simulator builds (see Podfile RN_SIMULATOR).
+#if !targetEnvironment(simulator)
 import RGCxrClient
 import RGCoreKit
+#endif
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -16,7 +19,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+#if !targetEnvironment(simulator)
     RGLog.setup(false)
+#endif
 
     let delegate = ReactNativeDelegate()
     let factory = RCTReactNativeFactory(delegate: delegate)
@@ -41,9 +46,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     open url: URL,
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
+#if !targetEnvironment(simulator)
     if CxrClient.shared.handleOpenURL(url) {
       return true
     }
+#endif
 
     return false
   }

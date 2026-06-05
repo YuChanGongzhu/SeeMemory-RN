@@ -1,6 +1,6 @@
 import {apiRequest} from './api-client';
 import {API_ROUTES, isRouteConfigured} from './api-routes';
-import {getToken} from './storage';
+import {baseRequest} from '../apis/core/request';
 
 interface TokenResponse {
   token: string;
@@ -45,13 +45,45 @@ interface UploadFileResult {
 
 interface AsrResponse {
   text?: string;
+  cleaned_text?: string;
+  translated_text?: string;
+  session_id?: string;
+  detail?: unknown;
   [key: string]: unknown;
 }
 
 const AMPHION_ASR_ENDPOINT = 'https://amphion.top/asr/v1/audio/transcriptions';
-const AMPHION_ASR_API_KEY = 'sk-2d106f6227476125be26a20fd3fbd62875bea1146440ebfd1d8a2bde477a2631';
 const AMPHION_ASR_AUTH_MODE: 'bearer' | 'x-api-key' | 'query' = 'bearer';
-const AMPHION_ASR_LANGUAGE = '';
+const AMPHION_ASR_API_KEY = 'sk-2d106f6227476125be26a20fd3fbd62875bea1146440ebfd1d8a2bde477a2631';
+
+type AmphionAsrCleanupLevel = 'off' | 'light' | 'standard';
+
+interface AmphionAsrConfig {
+  language?: string;
+  translate_mode?: boolean;
+  target_language?: string;
+  cleanup?: {
+    level?: AmphionAsrCleanupLevel;
+    text_emotion?: boolean;
+  };
+  hotwords?: {
+    builtin?: string[];
+    custom?: string[];
+  };
+}
+
+const AMPHION_ASR_DEFAULT_CONFIG: AmphionAsrConfig = {
+  language: 'auto',
+  translate_mode: false,
+  cleanup: {
+    level: 'light',
+    text_emotion: false,
+  },
+  hotwords: {
+    builtin: [],
+    custom: [],
+  },
+};
 
 function normalizeFileUri(filePath: string): string {
   return filePath.startsWith('file://') ? filePath : `file://${filePath}`;
@@ -76,6 +108,7 @@ function buildAmphionAsrRequestInfo() {
   const url = new URL(AMPHION_ASR_ENDPOINT);
   const headers: Record<string, string> = {};
 
+
   if (AMPHION_ASR_AUTH_MODE === 'query') {
     url.searchParams.set('api_key', AMPHION_ASR_API_KEY);
   } else if (AMPHION_ASR_AUTH_MODE === 'x-api-key') {
@@ -87,38 +120,56 @@ function buildAmphionAsrRequestInfo() {
   return {url: url.toString(), headers};
 }
 
+function buildAmphionAsrConfig(): AmphionAsrConfig {
+  return AMPHION_ASR_DEFAULT_CONFIG;
+}
+
+function getAsrErrorMessage(payload: AsrResponse | {raw: string}): string {
+  if (!payload || typeof payload !== 'object') {
+    return 'ASR 请求失败';
+  }
+
+  const detail = 'detail' in payload ? payload.detail : undefined;
+  if (typeof detail === 'string') {
+    return detail;
+  }
+
+  if (detail && typeof detail === 'object') {
+    const detailRecord = detail as Record<string, unknown>;
+    const message = typeof detailRecord.message === 'string' ? detailRecord.message : '';
+    const sessionId = typeof detailRecord.session_id === 'string' ? detailRecord.session_id : '';
+    return [message || 'ASR 请求失败', sessionId ? `session_id=${sessionId}` : '']
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  if (typeof payload.raw === 'string' && payload.raw.trim()) {
+    return payload.raw.trim();
+  }
+
+  return 'ASR 请求失败';
+}
+
 export async function getPresignedUrl(
   fileExtension: string,
   scene: number,
-  token?: string,
 ): Promise<PresignedUrlApiResponse> {
-  if (!isRouteConfigured(API_ROUTES.getPresignedUrl)) {
-    throw new Error('getPresignedUrl route is not configured yet.');
-  }
-
-  const response = await apiRequest<PresignedUrlApiResponse>(API_ROUTES.getPresignedUrl, {
-    authToken: token,
-    query: {
-      fileExtension,
-      scene,
-    },
+  // 与 see-mem-studio-web 一致：走 manager-api 通用预签名接口
+  //   GET https://ms.seemem.com/api/common/getPresignedUrl?fileExtension=&scene=
+  // 用登录态 auth_token (Bearer) 鉴权，返回 {code,msg,data:{presignedUrl,objectUrl}} 信封。
+  // （旧实现打的是 seemem.com/api/v1/memory/getPresignedUrl，那是另一套鉴权，
+  //   会返回「authorization 无效」。scene 必须是后端 FileUploadEnum 的合法值。）
+  const data = await baseRequest<PresignedUrlPayload>({
+    method: 'GET',
+    path: '/common/getPresignedUrl',
+    query: {fileExtension, scene},
   });
 
-  if (response.code !== 0 || !response.data?.presignedUrl || !response.data?.objectUrl) {
-    const usedToken = token || (await getToken()) || '';
-    console.warn('[getPresignedUrl] Invalid response', {
-      fileExtension,
-      scene,
-      code: response.code,
-      msg: response.msg,
-      authPreview: usedToken ? `${usedToken.slice(0, 8)}...` : 'none',
-      hasPresignedUrl: !!response.data?.presignedUrl,
-      hasObjectUrl: !!response.data?.objectUrl,
-    });
-    throw new Error(response.msg || 'Failed to get presigned URL.');
+  if (!data?.presignedUrl || !data?.objectUrl) {
+    throw new Error('获取预签名地址失败：返回为空');
   }
 
-  return response;
+  return {code: 0, msg: 'ok', data};
 }
 
 export async function putFileToPresignedUrl(
@@ -155,7 +206,6 @@ export async function putFileToPresignedUrl(
 }
 
 export async function uploadFileToCos({
-  token,
   filePath,
   fileExtension,
   contentType,
@@ -163,7 +213,7 @@ export async function uploadFileToCos({
   extra,
 }: UploadFileOptions): Promise<UploadFileResult> {
   const resolvedExtension = (fileExtension || getFileExtension(filePath)).toLowerCase();
-  const presignedResult = await getPresignedUrl(resolvedExtension, scene, token);
+  const presignedResult = await getPresignedUrl(resolvedExtension, scene);
   const {presignedUrl, objectUrl} = presignedResult.data;
   await putFileToPresignedUrl(presignedUrl, filePath, contentType);
 
@@ -218,6 +268,7 @@ export async function transcribeAudioFile(filePath: string): Promise<string> {
   const fileExtension = getFileExtension(filePath);
   const mimeType = fileExtension === 'wav' ? 'audio/wav' : `audio/${fileExtension}`;
   const form = new FormData();
+  const config = buildAmphionAsrConfig();
 
   form.append('file', {
     uri: normalizeFileUri(filePath),
@@ -225,9 +276,7 @@ export async function transcribeAudioFile(filePath: string): Promise<string> {
     type: mimeType,
   } as any);
 
-  if (AMPHION_ASR_LANGUAGE) {
-    form.append('language', AMPHION_ASR_LANGUAGE);
-  }
+  form.append('config', JSON.stringify(config));
 
   const response = await fetch(url, {
     method: 'POST',
@@ -244,14 +293,23 @@ export async function transcribeAudioFile(filePath: string): Promise<string> {
   }
 
   if (!response.ok) {
-    throw new Error(
-      `ASR 请求失败 (${response.status}): ${
-        typeof payload === 'object' ? JSON.stringify(payload) : rawText
-      }`,
-    );
+    throw new Error(`ASR 请求失败 (${response.status}): ${getAsrErrorMessage(payload)}`);
   }
 
-  const transcript = typeof payload.text === 'string' ? payload.text.trim() : '';
+  if ('raw' in payload) {
+    throw new Error(`ASR 返回非 JSON: ${payload.raw}`);
+  }
+
+  const asr = payload as AsrResponse;
+
+  const transcript =
+    typeof asr.cleaned_text === 'string' && asr.cleaned_text.trim()
+      ? asr.cleaned_text.trim()
+      : typeof asr.translated_text === 'string' && asr.translated_text.trim()
+        ? asr.translated_text.trim()
+        : typeof asr.text === 'string'
+          ? asr.text.trim()
+          : '';
   if (!transcript) {
     throw new Error('ASR 成功返回，但未拿到可用文本');
   }
@@ -265,7 +323,7 @@ export async function uploadImageFile(
   mimeType?: string,
 ): Promise<UploadResponse> {
   const fileExtension = getFileExtension(filePath);
-  const scene = 4;
+  const scene = 7; // FileUploadEnum.MEMERY_IMAGE（记忆图片）
   const normalizedMimeType =
     mimeType?.trim() || (fileExtension === 'jpg' ? 'image/jpeg' : `image/${fileExtension}`);
 

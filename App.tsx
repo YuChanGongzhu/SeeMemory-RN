@@ -4,12 +4,14 @@
  */
 
 import React from 'react';
-import {StatusBar, Text, View} from 'react-native';
+import {ActivityIndicator, StatusBar, Text, View} from 'react-native';
 import {NavigationContainer, type Theme as NavigationTheme} from '@react-navigation/native';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 
 import {ThemeProvider, useTheme} from './src/theme/ThemeProvider';
+import {AuthProvider, useAuth} from './src/auth/AuthContext';
+import {LoginScreen} from './src/screens/LoginScreen';
 import {MemoryScreen} from './src/theme/MemoryScreen';
 import {DevicesScreen} from './src/theme/DevicesScreen';
 import {SettingsScreen} from './src/theme/SettingsScreen';
@@ -150,11 +152,50 @@ function AppNavigator() {
   );
 }
 
+function AuthGate() {
+  const {theme} = useTheme();
+  const {isHydrated, authToken} = useAuth();
+
+  if (!isHydrated) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: theme.colors.bg,
+        }}>
+        <StatusBar
+          barStyle={theme.mode === 'warm' ? 'dark-content' : 'light-content'}
+          backgroundColor={theme.colors.bg}
+        />
+        <ActivityIndicator size="large" color={theme.colors.accent} />
+      </View>
+    );
+  }
+
+  if (!authToken) {
+    return (
+      <>
+        <StatusBar
+          barStyle={theme.mode === 'warm' ? 'dark-content' : 'light-content'}
+          backgroundColor={theme.colors.bg}
+        />
+        <LoginScreen />
+      </>
+    );
+  }
+
+  return <AppNavigator />;
+}
+
 function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <AppNavigator />
+        <AuthProvider>
+          <AuthGate />
+        </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );
