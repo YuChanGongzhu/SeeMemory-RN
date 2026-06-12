@@ -1,7 +1,7 @@
 // RingMemoryApp Theme System
-// Two distinct visual directions for the app
+// Three visual directions: Neon Horizon, Sunset Grove, Shiguang
 
-export type ThemeMode = 'neon' | 'warm';
+export type ThemeMode = 'neon' | 'warm' | 'shiguang';
 
 export interface Theme {
   mode: ThemeMode;
@@ -84,6 +84,18 @@ export interface Theme {
     button: any;
     glow?: string;
   };
+
+  // 拾光-specific season colors
+  seasons?: {
+    spring: string;
+    summer: string;
+    autumn: string;
+    winter: string;
+  };
+
+  // 拾光-specific gold accent
+  gold?: string;
+  goldGlow?: string;
 }
 
 // ============================================
@@ -268,10 +280,114 @@ const warmTheme: Theme = {
   },
 };
 
+// ============================================
+// VERSION C: SHIGUANG (拾光 · Four Seasons Memory)
+// ============================================
+const shiguangTheme: Theme = {
+  mode: 'shiguang',
+  name: '拾光',
+
+  colors: {
+    bg: '#F3F1E9',
+    bgSecondary: '#E7E8DD',
+    bgCard: '#FFFFFF',
+    bgCardAlt: '#EEF0E8',
+
+    accent: '#3F8A82',
+    accentSecondary: '#E3A94F',
+    accentGlow: 'rgba(63, 138, 130, 0.18)',
+
+    success: '#7FA868',
+    warning: '#C2803C',
+    error: '#C0584A',
+
+    text: '#28302C',
+    textSecondary: '#6B7363',
+    textMuted: '#9AA095',
+
+    border: '#EAE5D7',
+    borderAccent: '#C9DDD7',
+
+    input: '#FFFFFF',
+    inputBorder: '#E6E1D2',
+    inputBorderFocus: '#3F8A82',
+
+    buttonPrimary: '#3F8A82',
+    buttonPrimaryText: '#FFFFFF',
+    buttonSecondary: '#FFFFFF',
+    buttonSecondaryText: '#3F8A82',
+
+    chatUser: '#3F8A82',
+    chatAI: '#FFFFFF',
+    chatAIBorder: '#EAE5D7',
+
+    statusConnected: '#7FA868',
+    statusConnecting: '#C2803C',
+    statusError: '#C0584A',
+    statusOffline: '#9AA095',
+
+    recordDot: '#3F8A82',
+  },
+
+  fonts: {
+    display: 'System',
+    heading: 'System',
+    body: 'System',
+    mono: 'ui-monospace',
+  },
+
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 16,
+    lg: 24,
+    xl: 32,
+    xxl: 48,
+  },
+
+  radius: {
+    sm: 8,
+    md: 14,
+    lg: 20,
+    xl: 24,
+    pill: 20,
+  },
+
+  shadows: {
+    card: {
+      shadowColor: '#403C28',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.08,
+      shadowRadius: 24,
+      elevation: 4,
+    },
+    button: {
+      shadowColor: '#3F8A82',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 6,
+    },
+  },
+
+  // 拾光-specific season colors
+  seasons: {
+    spring: '#7FA868',
+    summer: '#3F8A82',
+    autumn: '#C2803C',
+    winter: '#7C92A6',
+  },
+
+  // 拾光-specific accent colors
+  gold: '#E3A94F',
+  goldGlow: 'rgba(242, 204, 131, 0.75)',
+};
+
 // Export all themes
 export const themes: Record<ThemeMode, Theme> = {
   neon: neonTheme,
   warm: warmTheme,
+  shiguang: shiguangTheme,
 };
 
-export const defaultTheme: ThemeMode = 'neon';
+export const defaultTheme: ThemeMode = 'shiguang';

@@ -5,6 +5,9 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+# Workaround for react-native-reanimated v4 needing RNWorklets
+source 'https://cdn.cocoapods.org/'
+
 def patch_hermes_cli_path(installer)
   # PODS_ROOT points to RingMemoryApp/ios/Pods, so node_modules is two levels up.
   hermes_cli_path = '${PODS_ROOT}/../../node_modules/hermes-compiler/hermesc/osx-bin/hermesc'
@@ -34,6 +37,9 @@ use_frameworks! :linkage => :dynamic
 
 target 'RingMemoryApp' do
   config = use_native_modules!
+
+  # Explicitly add RNWorklets for reanimated v4
+  pod 'RNWorklets', :path => '../node_modules/react-native-worklets'
 
   use_react_native!(
     :path => config[:reactNativePath],

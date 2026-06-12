@@ -18,7 +18,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setThemeModeState(current => current === 'neon' ? 'warm' : 'neon');
+    setThemeModeState(current => {
+      if (current === 'neon') return 'warm';
+      if (current === 'warm') return 'shiguang';
+      return 'neon';
+    });
   }, []);
 
   const value: ThemeContextValue = {

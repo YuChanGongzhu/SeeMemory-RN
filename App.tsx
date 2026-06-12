@@ -1,10 +1,10 @@
 /**
  * RingMemoryApp - Smart Ring Memory Assistant
- * Three Theme Versions: Neon Horizon, Sunset Grove, Obsidian Gold
+ * Three Theme Versions: Neon Horizon, Sunset Grove, Shiguang
  */
 
 import React from 'react';
-import {ActivityIndicator, StatusBar, Text, View} from 'react-native';
+import {ActivityIndicator, StatusBar, Text, View, TouchableOpacity, StyleSheet} from 'react-native';
 import {NavigationContainer, type Theme as NavigationTheme} from '@react-navigation/native';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
@@ -12,34 +12,69 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {ThemeProvider, useTheme} from './src/theme/ThemeProvider';
 import {AuthProvider, useAuth} from './src/auth/AuthContext';
 import {LoginScreen} from './src/screens/LoginScreen';
-import {MemoryScreen} from './src/theme/MemoryScreen';
-import {DevicesScreen} from './src/theme/DevicesScreen';
-import {SettingsScreen} from './src/theme/SettingsScreen';
+import {NowScreen} from './src/screens/NowScreen';
+import {ChatScreen} from './src/screens/ChatScreen';
+import {MemoriesScreen} from './src/screens/MemoriesScreen';
+import {MeScreen} from './src/screens/MeScreen';
+import {SunIcon, ChatIcon, MemoryIcon, UserIcon, PlusIcon} from './src/components/Icons';
 
 const Tab = createBottomTabNavigator();
 
 function TabIcon({
-  glyph,
+  name,
   focused,
   activeColor,
   inactiveColor,
+  mode,
 }: {
-  glyph: string;
+  name: string;
   focused: boolean;
   activeColor: string;
   inactiveColor: string;
+  mode: string;
 }) {
+  const size = focused ? 23 : 21;
+  const color = focused ? activeColor : inactiveColor;
+  const strokeWidth = focused ? 2 : 1.7;
+
+  if (mode === 'shiguang') {
+    const icons: Record<string, React.ReactNode> = {
+      'Now': <SunIcon size={size} color={color} strokeWidth={strokeWidth} />,
+      'Chat': <ChatIcon size={size} color={color} strokeWidth={strokeWidth} />,
+      'Memories': <MemoryIcon size={size} color={color} strokeWidth={strokeWidth} />,
+      'Me': <UserIcon size={size} color={color} strokeWidth={strokeWidth} />,
+    };
+    return <View style={{alignItems: 'center', justifyContent: 'center'}}>{icons[name]}</View>;
+  }
+
+  // Neon theme icons
+  const neonIcons: Record<string, string> = {
+    'Now': '◈',
+    'Chat': '◇',
+    'Memories': '◆',
+    'Me': '◎',
+  };
+  // Warm theme icons
+  const warmIcons: Record<string, string> = {
+    'Now': '☀️',
+    'Chat': '💬',
+    'Memories': '🌳',
+    'Me': '⚙️',
+  };
+
+  const icons = mode === 'neon' ? neonIcons : warmIcons;
+
   return (
     <View style={{alignItems: 'center', justifyContent: 'center'}}>
       <Text
         style={{
-          fontSize: focused ? 22 : 20,
-          color: focused ? activeColor : inactiveColor,
+          fontSize: size,
+          color,
           opacity: focused ? 1 : 0.9,
           textShadowColor: focused ? activeColor : 'transparent',
           textShadowRadius: focused ? 8 : 0,
         }}>
-        {glyph}
+        {icons[name]}
       </Text>
     </View>
   );
@@ -49,7 +84,7 @@ function AppNavigator() {
   const {theme} = useTheme();
 
   const navTheme: NavigationTheme = {
-    dark: theme.mode !== 'warm',
+    dark: theme.mode !== 'warm' && theme.mode !== 'shiguang',
     colors: {
       primary: theme.colors.accent,
       background: theme.colors.bg,
@@ -66,18 +101,47 @@ function AppNavigator() {
     },
   };
 
-  const getTabEmojis = () => {
-    if (theme.mode === 'neon') return {memory: '◈', devices: '⬡', settings: '✦'};
-    if (theme.mode === 'warm') return {memory: '🌿', devices: '📱', settings: '⚙️'};
-    return {memory: '◆', devices: '◎', settings: '◈'};
+  const getTabConfig = () => {
+    if (theme.mode === 'shiguang') {
+      return {
+        tabs: [
+          {name: 'Now', label: '此刻'},
+          {name: 'Chat', label: '对话'},
+          {name: 'Memories', label: '记忆'},
+          {name: 'Me', label: '我的'},
+        ],
+        hasFab: true,
+      };
+    }
+    if (theme.mode === 'neon') {
+      return {
+        tabs: [
+          {name: 'Now', label: '此刻'},
+          {name: 'Chat', label: '对话'},
+          {name: 'Memories', label: '记忆'},
+          {name: 'Me', label: '我的'},
+        ],
+        hasFab: false,
+      };
+    }
+    // warm
+    return {
+      tabs: [
+        {name: 'Now', label: '此刻'},
+        {name: 'Chat', label: '对话'},
+        {name: 'Memories', label: '记忆'},
+        {name: 'Me', label: '我的'},
+      ],
+      hasFab: false,
+    };
   };
 
-  const emojis = getTabEmojis();
+  const config = getTabConfig();
 
   return (
     <>
       <StatusBar
-        barStyle={theme.mode === 'warm' ? 'dark-content' : 'light-content'}
+        barStyle={theme.mode === 'warm' || theme.mode === 'shiguang' ? 'dark-content' : 'light-content'}
         backgroundColor={theme.colors.bg}
       />
       <NavigationContainer theme={navTheme}>
@@ -85,67 +149,78 @@ function AppNavigator() {
           screenOptions={{
             headerShown: false,
             tabBarStyle: {
-              backgroundColor: theme.colors.bgSecondary,
-              borderTopColor: theme.colors.border,
+              backgroundColor: theme.mode === 'shiguang' ? 'rgba(243, 241, 233, 0.88)' : theme.colors.bgSecondary,
+              borderTopColor: theme.mode === 'shiguang' ? '#E6E1D2' : theme.colors.border,
               borderTopWidth: 1,
               paddingBottom: 8,
               paddingTop: 8,
-              height: 60,
+              height: theme.mode === 'shiguang' ? 72 : 60,
             },
             tabBarActiveTintColor: theme.colors.accent,
-            tabBarInactiveTintColor: theme.colors.textSecondary,
+            tabBarInactiveTintColor: theme.colors.textMuted,
             tabBarLabelStyle: {
-              fontSize: 11,
-              fontWeight: '400',
-              letterSpacing: 0,
-              ...({}),
+              fontSize: theme.mode === 'shiguang' ? 10.5 : 11,
+              fontWeight: theme.mode === 'shiguang' ? '500' : '400',
+              letterSpacing: theme.mode === 'shiguang' ? 0.5 : 0,
             },
           }}>
-          <Tab.Screen
-            name="Memory"
-            component={MemoryScreen}
-            options={{
-              tabBarLabel: '记忆',
-              tabBarIcon: ({focused}) => (
-                <TabIcon
-                  glyph={emojis.memory}
-                  focused={focused}
-                  activeColor={theme.colors.accent}
-                  inactiveColor={theme.colors.textSecondary}
-                />
-              ),
-            }}
-          />
-          <Tab.Screen
-            name="Devices"
-            component={DevicesScreen}
-            options={{
-              tabBarLabel: '设备',
-              tabBarIcon: ({focused}) => (
-                <TabIcon
-                  glyph={emojis.devices}
-                  focused={focused}
-                  activeColor={theme.colors.accent}
-                  inactiveColor={theme.colors.textSecondary}
-                />
-              ),
-            }}
-          />
-          <Tab.Screen
-            name="Settings"
-            component={SettingsScreen}
-            options={{
-              tabBarLabel: '设置',
-              tabBarIcon: ({focused}) => (
-                <TabIcon
-                  glyph={emojis.settings}
-                  focused={focused}
-                  activeColor={theme.colors.accent}
-                  inactiveColor={theme.colors.textSecondary}
-                />
-              ),
-            }}
-          />
+          {config.tabs.map((tab) => (
+            <Tab.Screen
+              key={tab.name}
+              name={tab.name}
+              component={
+                tab.name === 'Now' ? NowScreen :
+                tab.name === 'Chat' ? ChatScreen :
+                tab.name === 'Memories' ? MemoriesScreen :
+                MeScreen
+              }
+              options={{
+                tabBarLabel: tab.label,
+                tabBarIcon: ({focused}) => (
+                  <TabIcon
+                    name={tab.name}
+                    focused={focused}
+                    activeColor={theme.colors.accent}
+                    inactiveColor={theme.colors.textMuted}
+                    mode={theme.mode}
+                  />
+                ),
+              }}
+            />
+          ))}
+          {config.hasFab && (
+            <Tab.Screen
+              name="Capture"
+              component={NowScreen}
+              options={{
+                tabBarLabel: () => null,
+                tabBarIcon: ({focused}) => (
+                  <View style={[localStyles.fab, {
+                    width: 58,
+                    height: 58,
+                    borderRadius: 29,
+                    marginTop: -26,
+                    backgroundColor: theme.colors.accent,
+                    borderWidth: 4,
+                    borderColor: '#F3F1E9',
+                    shadowColor: '#3F8A82',
+                    shadowOpacity: 0.55,
+                    shadowRadius: 12,
+                    elevation: 8,
+                  }]}>
+                    <PlusIcon size={26} color="#FFFFFF" strokeWidth={2.3} />
+                  </View>
+                ),
+              }}
+              listeners={({navigation}) => ({
+                tabPress: (e) => {
+                  e.preventDefault();
+                  // Handle capture action
+                  console.log('Capture pressed');
+                },
+              })}
+            />
+          )}
         </Tab.Navigator>
       </NavigationContainer>
     </>
@@ -166,7 +241,7 @@ function AuthGate() {
           backgroundColor: theme.colors.bg,
         }}>
         <StatusBar
-          barStyle={theme.mode === 'warm' ? 'dark-content' : 'light-content'}
+          barStyle={theme.mode === 'warm' || theme.mode === 'shiguang' ? 'dark-content' : 'light-content'}
           backgroundColor={theme.colors.bg}
         />
         <ActivityIndicator size="large" color={theme.colors.accent} />
@@ -178,7 +253,7 @@ function AuthGate() {
     return (
       <>
         <StatusBar
-          barStyle={theme.mode === 'warm' ? 'dark-content' : 'light-content'}
+          barStyle={theme.mode === 'warm' || theme.mode === 'shiguang' ? 'dark-content' : 'light-content'}
           backgroundColor={theme.colors.bg}
         />
         <LoginScreen />
@@ -200,5 +275,12 @@ function App(): React.JSX.Element {
     </SafeAreaProvider>
   );
 }
+
+const localStyles = StyleSheet.create({
+  fab: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export default App;
