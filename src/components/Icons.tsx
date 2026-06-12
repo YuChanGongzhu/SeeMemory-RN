@@ -202,3 +202,13 @@ export function FamilyIcon({size = 26, color = '#3F8A82', strokeWidth = 1.6}: Ic
     </Svg>
   );
 }
+
+// 发送图标
+export function SendIcon({size = 18, color = 'currentColor', strokeWidth = 1.8}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M22 2L11 13" />
+      <Path d="M22 2L15 22L11 13L2 9L22 2Z" />
+    </Svg>
+  );
+}
