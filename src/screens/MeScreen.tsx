@@ -14,6 +14,7 @@ import type {Theme} from '../theme/index';
 import {GlassesIcon, RingIcon, ServerIcon, LockIcon, StarIcon, GridIcon, FamilyIcon} from '../components/Icons';
 import {FadeUpView} from '../components/Animated';
 import {NasPage} from '../components/NasPage';
+import {useAuth} from '../auth/AuthContext';
 
 type Device = {
   id: string;
@@ -57,6 +58,7 @@ export function MeScreen() {
   const insets = useSafeAreaInsets();
   const s = theme.spacing;
   const r = theme.radius;
+  const {logout, isGuest} = useAuth();
 
   const [autoRecord, setAutoRecord] = useState(true);
   const [heartRateMark, setHeartRateMark] = useState(true);
@@ -71,6 +73,17 @@ export function MeScreen() {
         {text: '日落暖阳', onPress: () => setThemeMode('warm')},
         {text: '拾光', onPress: () => setThemeMode('shiguang')},
         {text: '取消', style: 'cancel'},
+      ],
+    );
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      '退出登录',
+      '确定要退出登录吗？',
+      [
+        {text: '取消', style: 'cancel'},
+        {text: '退出', style: 'destructive', onPress: logout},
       ],
     );
   };
@@ -327,6 +340,26 @@ export function MeScreen() {
             </Text>
           </TouchableOpacity>
         </FadeUpView>
+
+        {/* Logout button */}
+        <FadeUpView delay={450}>
+          <TouchableOpacity
+            style={[localStyles.logoutBtn, {
+              marginHorizontal: s.lg,
+              marginTop: s.md,
+              marginBottom: s.xl,
+              backgroundColor: theme.colors.bgCard,
+              borderColor: theme.colors.border,
+              borderRadius: r.lg,
+              padding: 15,
+              borderWidth: 1,
+            }]}
+            onPress={handleLogout}>
+            <Text style={[localStyles.logoutBtnText, {color: '#C0584A'}]}>
+              {isGuest ? '退出游客模式' : '退出登录'}
+            </Text>
+          </TouchableOpacity>
+        </FadeUpView>
       </ScrollView>
 
       <NasPage visible={nasOpen} onClose={() => setNasOpen(false)} />
@@ -529,6 +562,13 @@ const localStyles = StyleSheet.create({
   },
   themeSwitcherText: {
     fontSize: 13,
+    fontWeight: '600',
+  },
+  logoutBtn: {
+    alignItems: 'center',
+  },
+  logoutBtnText: {
+    fontSize: 14,
     fontWeight: '600',
   },
 });

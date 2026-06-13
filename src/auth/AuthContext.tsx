@@ -49,10 +49,12 @@ function pickDefaultDevice(
 interface AuthContextValue {
   isHydrated: boolean;
   authToken: string | null;
+  isGuest: boolean;
   user: UserInfo | null;
   devices: MemoryStudio[];
   selectedDevice: SelectedDevice | null;
   login: (phone: string, captcha: string) => Promise<void>;
+  loginAsGuest: () => void;
   logout: () => Promise<void>;
   selectDevice: (device: MemoryStudio | SelectedDevice) => Promise<void>;
   refreshDevices: () => Promise<MemoryStudio[]>;
@@ -63,6 +65,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({children}: {children: ReactNode}) {
   const [isHydrated, setIsHydrated] = useState(false);
   const [authToken, setAuthTokenState] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
   const [user, setUser] = useState<UserInfo | null>(null);
   const [devices, setDevices] = useState<MemoryStudio[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<SelectedDevice | null>(null);
@@ -92,10 +95,16 @@ export function AuthProvider({children}: {children: ReactNode}) {
     await clearStorageSession();
     clearSessionSingleton();
     setAuthTokenState(null);
+    setIsGuest(false);
     setUser(null);
     setDevices([]);
     applySelectedDevice(null);
   }, [applySelectedDevice]);
+
+  const loginAsGuest = useCallback(() => {
+    setIsGuest(true);
+    setAuthTokenState('guest-token');
+  }, []);
 
   // Hydrate persisted session on startup.
   useEffect(() => {
@@ -165,15 +174,17 @@ export function AuthProvider({children}: {children: ReactNode}) {
     () => ({
       isHydrated,
       authToken,
+      isGuest,
       user,
       devices,
       selectedDevice,
       login,
+      loginAsGuest,
       logout,
       selectDevice,
       refreshDevices,
     }),
-    [isHydrated, authToken, user, devices, selectedDevice, login, logout, selectDevice, refreshDevices],
+    [isHydrated, authToken, isGuest, user, devices, selectedDevice, login, loginAsGuest, logout, selectDevice, refreshDevices],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

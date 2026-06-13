@@ -17,6 +17,7 @@ import {MicIcon, CameraIcon, SendIcon} from '../components/Icons';
 import {AnimatedOrb, BubbleInView, FadeUpView} from '../components/Animated';
 import {useHermesChat} from '../hooks/useHermesChat';
 import {pickImageFromLibrary} from '../native/ImagePickerModule';
+import {useAuth} from '../auth/AuthContext';
 import type {ChatMessage} from '../types/chat';
 import {
   loadConversations,
@@ -269,9 +270,27 @@ export function ChatScreen() {
     reset,
   } = useHermesChat();
 
+  const {isGuest} = useAuth();
+
+  // 访客模式的暖心回复
+  const guestReplies = [
+    '每一天都值得被温柔以待，你的记忆是最珍贵的宝藏。',
+    '生活中的小确幸，都值得被记录下来。',
+    '愿你的每一天都充满阳光和温暖。',
+    '记忆是时间送给我们的礼物，好好珍惜。',
+    '每一个瞬间都是独一无二的，就像你一样。',
+  ];
+
+  // 访客模式的消息
+  const [guestMessages, setGuestMessages] = useState<ExtendedMessage[]>([]);
+
   // 当前显示的消息
   // 历史对话是只读的，新对话可以发送
-  const messages = activeConversation ? activeConversation.messages : realMessages;
+  const messages = activeConversation 
+    ? activeConversation.messages 
+    : isGuest 
+      ? guestMessages 
+      : realMessages;
   const isViewingHistory = !!activeConversation;
 
   // 加载历史对话
@@ -325,6 +344,24 @@ export function ChatScreen() {
     if (!inputText.trim() || isSending || isViewingHistory) return;
     const text = inputText;
     setInputText('');
+
+    // 访客模式：固定回复暖心的话
+    if (isGuest) {
+      const userMsg: ExtendedMessage = {
+        id: `guest-user-${Date.now()}`,
+        role: 'user',
+        text,
+      };
+      const reply = guestReplies[Math.floor(Math.random() * guestReplies.length)];
+      const aiMsg: ExtendedMessage = {
+        id: `guest-ai-${Date.now()}`,
+        role: 'assistant',
+        text: reply,
+      };
+      setGuestMessages(prev => [...prev, userMsg, aiMsg]);
+      return;
+    }
+
     await send(text);
   };
 

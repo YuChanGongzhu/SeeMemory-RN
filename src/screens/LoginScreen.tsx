@@ -20,7 +20,7 @@ const PHONE_RE = /^1\d{10}$/;
 export function LoginScreen() {
   const {theme} = useTheme();
   const insets = useSafeAreaInsets();
-  const {login} = useAuth();
+  const {login, loginAsGuest} = useAuth();
   const [phone, setPhone] = useState('');
   const [captcha, setCaptcha] = useState('');
   const [countdown, setCountdown] = useState(0);
@@ -200,6 +200,27 @@ export function LoginScreen() {
             <Text style={{color: c.buttonPrimaryText, fontSize: 15, fontWeight: '700'}}>登录</Text>
           )}
         </TouchableOpacity>
+
+        {/* Guest Mode */}
+        <TouchableOpacity
+          style={[
+            styles.guestButton,
+            {
+              backgroundColor: 'transparent',
+              borderRadius: theme.mode === 'warm' ? r.pill : r.md,
+              paddingVertical: s.md,
+              marginTop: s.md,
+              borderWidth: 1,
+              borderColor: c.border,
+            },
+          ]}
+          onPress={loginAsGuest}>
+          <Text style={{color: c.textSecondary, fontSize: 14, fontWeight: '500'}}>游客模式</Text>
+        </TouchableOpacity>
+
+        <Text style={[styles.guestHint, {color: c.textMuted, marginTop: s.sm}]}>
+          游客模式可体验基础功能，登录后可同步数据
+        </Text>
       </View>
     </KeyboardAvoidingView>
   );
@@ -214,4 +235,6 @@ const styles = StyleSheet.create({
   input: {borderWidth: 1, fontSize: 15},
   smsButton: {borderWidth: 1, alignItems: 'center', justifyContent: 'center', minWidth: 104},
   loginButton: {alignItems: 'center', justifyContent: 'center'},
+  guestButton: {alignItems: 'center', justifyContent: 'center'},
+  guestHint: {fontSize: 11, textAlign: 'center'},
 });
