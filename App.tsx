@@ -11,11 +11,13 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 
 import {ThemeProvider, useTheme} from './src/theme/ThemeProvider';
 import {AuthProvider, useAuth} from './src/auth/AuthContext';
+import {CaptureProvider, useCapturePanel} from './src/hooks/useCapturePanel';
 import {LoginScreen} from './src/screens/LoginScreen';
 import {NowScreen} from './src/screens/NowScreen';
 import {ChatScreen} from './src/screens/ChatScreen';
 import {MemoriesScreen} from './src/screens/MemoriesScreen';
 import {MeScreen} from './src/screens/MeScreen';
+import {CapturePanel} from './src/components/CapturePanel';
 import {SunIcon, ChatIcon, MemoryIcon, UserIcon, PlusIcon} from './src/components/Icons';
 
 const Tab = createBottomTabNavigator();
@@ -101,6 +103,8 @@ function AppNavigator() {
     },
   };
 
+  const {openCapture, captureOpen, closeCapture} = useCapturePanel();
+
   const getTabConfig = () => {
     if (theme.mode === 'shiguang') {
       return {
@@ -164,7 +168,7 @@ function AppNavigator() {
               letterSpacing: theme.mode === 'shiguang' ? 0.5 : 0,
             },
           }}>
-          {config.tabs.map((tab) => (
+          {config.tabs.slice(0, 2).map((tab) => (
             <Tab.Screen
               key={tab.name}
               name={tab.name}
@@ -194,7 +198,7 @@ function AppNavigator() {
               component={NowScreen}
               options={{
                 tabBarLabel: () => null,
-                tabBarIcon: ({focused}) => (
+                tabBarIcon: () => (
                   <View style={[localStyles.fab, {
                     width: 58,
                     height: 58,
@@ -212,15 +216,38 @@ function AppNavigator() {
                   </View>
                 ),
               }}
-              listeners={({navigation}) => ({
+              listeners={() => ({
                 tabPress: (e) => {
                   e.preventDefault();
-                  // Handle capture action
-                  console.log('Capture pressed');
+                  openCapture();
                 },
               })}
             />
           )}
+          {config.tabs.slice(2).map((tab) => (
+            <Tab.Screen
+              key={tab.name}
+              name={tab.name}
+              component={
+                tab.name === 'Now' ? NowScreen :
+                tab.name === 'Chat' ? ChatScreen :
+                tab.name === 'Memories' ? MemoriesScreen :
+                MeScreen
+              }
+              options={{
+                tabBarLabel: tab.label,
+                tabBarIcon: ({focused}) => (
+                  <TabIcon
+                    name={tab.name}
+                    focused={focused}
+                    activeColor={theme.colors.accent}
+                    inactiveColor={theme.colors.textMuted}
+                    mode={theme.mode}
+                  />
+                ),
+              }}
+            />
+          ))}
         </Tab.Navigator>
       </NavigationContainer>
     </>
@@ -261,7 +288,17 @@ function AuthGate() {
     );
   }
 
-  return <AppNavigator />;
+  return (
+    <>
+      <AppNavigator />
+      <RootCapturePanel />
+    </>
+  );
+}
+
+function RootCapturePanel() {
+  const {captureOpen, closeCapture} = useCapturePanel();
+  return <CapturePanel visible={captureOpen} onClose={closeCapture} />;
 }
 
 function App(): React.JSX.Element {
@@ -269,7 +306,9 @@ function App(): React.JSX.Element {
     <SafeAreaProvider>
       <ThemeProvider>
         <AuthProvider>
-          <AuthGate />
+          <CaptureProvider>
+            <AuthGate />
+          </CaptureProvider>
         </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>

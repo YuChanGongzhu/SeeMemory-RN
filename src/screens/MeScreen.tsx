@@ -4,78 +4,28 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  Switch,
   StyleSheet,
   Alert,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useTheme} from '../theme/ThemeProvider';
-import type {Theme} from '../theme/index';
 import {GlassesIcon, RingIcon, ServerIcon, LockIcon, StarIcon, GridIcon, FamilyIcon} from '../components/Icons';
 import {FadeUpView} from '../components/Animated';
 import {NasPage} from '../components/NasPage';
+import {DevicesOverlay} from '../components/DevicesOverlay';
+import {RechargeSheet} from '../components/RechargeSheet';
 import {useAuth} from '../auth/AuthContext';
 
-type Device = {
-  id: string;
-  name: string;
-  model: string;
-  icon: React.ReactNode;
-  connected: boolean;
-  stats: string;
-  battery: string;
-  batteryColor: string;
-  iconBg: string;
-};
-
-const mockDevices: Device[] = [
-  {
-    id: 'glasses',
-    name: '拾光眼镜',
-    model: 'Vision A1',
-    icon: <GlassesIcon size={22} color="#3F8A82" />,
-    connected: true,
-    stats: '今天 23 帧',
-    battery: '68%',
-    batteryColor: '#7FA868',
-    iconBg: '#DCEAE6',
-  },
-  {
-    id: 'ring',
-    name: '拾光戒指',
-    model: 'Halo R1',
-    icon: <RingIcon size={22} color="#7FA868" />,
-    connected: true,
-    stats: '今天收藏 5',
-    battery: '84%',
-    batteryColor: '#7FA868',
-    iconBg: '#E8EEDD',
-  },
-];
-
 export function MeScreen() {
-  const {theme, themeMode, setThemeMode} = useTheme();
+  const {theme} = useTheme();
   const insets = useSafeAreaInsets();
   const s = theme.spacing;
   const r = theme.radius;
   const {logout, isGuest} = useAuth();
 
-  const [autoRecord, setAutoRecord] = useState(true);
-  const [heartRateMark, setHeartRateMark] = useState(true);
   const [nasOpen, setNasOpen] = useState(false);
-
-  const handleThemeChange = () => {
-    Alert.alert(
-      '切换主题',
-      '选择应用主题风格',
-      [
-        {text: '赛博霓虹', onPress: () => setThemeMode('neon')},
-        {text: '日落暖阳', onPress: () => setThemeMode('warm')},
-        {text: '拾光', onPress: () => setThemeMode('shiguang')},
-        {text: '取消', style: 'cancel'},
-      ],
-    );
-  };
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const [rechargeOpen, setRechargeOpen] = useState(false);
 
   const handleLogout = () => {
     Alert.alert(
@@ -89,486 +39,351 @@ export function MeScreen() {
   };
 
   return (
-    <View style={[localStyles.container, {backgroundColor: theme.colors.bg}]}>
+    <View style={[styles.container, {backgroundColor: theme.colors.bg}]}>
       <ScrollView
-        style={localStyles.scrollView}
+        style={styles.scrollView}
         contentContainerStyle={{paddingBottom: 100}}
         showsVerticalScrollIndicator={false}>
-        {/* Header */}
+
+        {/* ── Profile ── */}
         <FadeUpView>
-          <View style={[localStyles.header, {
-            paddingTop: insets.top + s.md + 10,
-            paddingHorizontal: s.lg,
-            marginBottom: s.md,
-          }]}>
-            <View style={localStyles.profileRow}>
-              <View style={[localStyles.avatar, {
-                backgroundColor: 'linear-gradient(135deg, #A9CBB0, #3F8A82)',
-              }]}>
-                <Text style={{fontSize: 24, color: '#FFFFFF'}}>春</Text>
+          <View style={[styles.profileSection, {paddingTop: insets.top + s.md + 10, paddingHorizontal: s.lg, marginBottom: s.md}]}>
+            <View style={styles.profileRow}>
+              {/* Avatar: radial gradient approximated with two overlapping Views */}
+              <View style={styles.avatarOuter}>
+                <View style={styles.avatarInner} />
               </View>
               <View style={{flex: 1}}>
-                <Text style={[localStyles.profileName, {color: theme.colors.text}]}>
-                  春水初生
-                </Text>
-                <Text style={[localStyles.profileId, {color: theme.colors.textMuted, fontFamily: theme.fonts.mono}]}>
-                  拾光号 7507888057
-                </Text>
+                <Text style={[styles.profileName, {color: theme.colors.text}]}>春水初生</Text>
+                <Text style={[styles.profileId, {color: theme.colors.textMuted}]}>拾光号 7507888057</Text>
               </View>
-              <TouchableOpacity style={[localStyles.settingsBtn, {
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.bgCard,
-              }]}>
+              <TouchableOpacity style={[styles.qrBtn, {borderColor: theme.colors.border, backgroundColor: theme.colors.bgCard}]}>
                 <GridIcon size={18} color="#7C8474" />
               </TouchableOpacity>
             </View>
           </View>
         </FadeUpView>
 
-        {/* Devices Section */}
-        <FadeUpView delay={100}>
-          <View style={[localStyles.sectionTitleRow, {marginHorizontal: s.lg}]}>
-            <Text style={[localStyles.sectionTitle, {color: theme.colors.textSecondary}]}>
-              我的设备
-            </Text>
+        {/* ── Points card ── */}
+        <FadeUpView delay={80}>
+          <TouchableOpacity
+            style={[styles.pointsCard, {marginHorizontal: s.lg, marginBottom: s.sm + 2}]}
+            onPress={() => setRechargeOpen(true)}
+            activeOpacity={0.85}>
+            <View style={styles.pointsGlow} />
+            <View style={styles.pointsTop}>
+              <View style={styles.pointsLeft}>
+                <StarIcon size={20} color="#F2CC83" />
+                <Text style={styles.pointsLabel}>拾光积分</Text>
+              </View>
+              <View style={styles.pointsRechargePill}>
+                <Text style={styles.pointsRechargeText}>充值 ›</Text>
+              </View>
+            </View>
+            <View style={styles.pointsNumRow}>
+              <Text style={styles.pointsNum}>1,280</Text>
+              <Text style={styles.pointsUnit}>分 · 本月已用 320</Text>
+            </View>
+            <Text style={styles.pointsHint}>可用于 AI 深度总结 · 高清原片回放 · 云端索引扩容</Text>
+          </TouchableOpacity>
+        </FadeUpView>
+
+        {/* ── 我的设备 ── */}
+        <FadeUpView delay={130}>
+          <Text style={[styles.sectionTitle, {marginHorizontal: s.lg + 2, marginBottom: 11, color: '#5F665B'}]}>
+            我的设备
+          </Text>
+        </FadeUpView>
+
+        {/* Device cards */}
+        <FadeUpView delay={160}>
+          <View style={[styles.devicesRow, {marginHorizontal: s.lg}]}>
+            <TouchableOpacity
+              style={[styles.deviceCard, {backgroundColor: theme.colors.bgCard, borderColor: theme.colors.border}]}
+              onPress={() => setDevicesOpen(true)}
+              activeOpacity={0.7}>
+              <View style={styles.deviceCardHead}>
+                <View style={[styles.deviceIconWrap, {backgroundColor: '#DCEAE6'}]}>
+                  <GlassesIcon size={22} color="#3F8A82" />
+                </View>
+                <View style={[styles.deviceOnlineDot, {backgroundColor: '#7FA868', shadowColor: 'rgba(127,168,104,0.18)'}]} />
+              </View>
+              <Text style={[styles.deviceName, {color: theme.colors.text}]}>拾光眼镜</Text>
+              <Text style={[styles.deviceModel, {color: theme.colors.textMuted}]}>Vision A1</Text>
+              <View style={[styles.deviceStats, {borderTopColor: theme.colors.border}]}>
+                <Text style={[styles.deviceStatsText, {color: theme.colors.textSecondary}]}>今天 23 段</Text>
+                <Text style={[styles.deviceBattery, {color: '#7FA868'}]}>68%</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.deviceCard, {backgroundColor: theme.colors.bgCard, borderColor: theme.colors.border}]}
+              onPress={() => setDevicesOpen(true)}
+              activeOpacity={0.7}>
+              <View style={styles.deviceCardHead}>
+                <View style={[styles.deviceIconWrap, {backgroundColor: '#E8EEDD'}]}>
+                  <RingIcon size={22} color="#7FA868" />
+                </View>
+                <View style={[styles.deviceOnlineDot, {backgroundColor: '#7FA868', shadowColor: 'rgba(127,168,104,0.18)'}]} />
+              </View>
+              <Text style={[styles.deviceName, {color: theme.colors.text}]}>拾光戒指</Text>
+              <Text style={[styles.deviceModel, {color: theme.colors.textMuted}]}>Halo R1</Text>
+              <View style={[styles.deviceStats, {borderTopColor: theme.colors.border}]}>
+                <Text style={[styles.deviceStatsText, {color: theme.colors.textSecondary}]}>今天收藏 5</Text>
+                <Text style={[styles.deviceBattery, {color: '#7FA868'}]}>84%</Text>
+              </View>
+            </TouchableOpacity>
           </View>
         </FadeUpView>
 
-        <FadeUpView delay={150} style={[localStyles.devicesRow, {marginHorizontal: s.lg}]}>
-          {mockDevices.map((device) => (
-            <View key={device.id} style={[localStyles.deviceCard, {
-              backgroundColor: theme.colors.bgCard,
-              borderColor: theme.colors.border,
-              borderRadius: r.lg,
-              padding: s.sm + 7,
-              flex: 1,
-            }]}>
-              <View style={localStyles.deviceHeader}>
-                <View style={[localStyles.deviceIconWrap, {backgroundColor: device.iconBg}]}>
-                  {device.icon}
-                </View>
-                <View style={[localStyles.deviceStatusDot, {
-                  backgroundColor: device.connected ? '#7FA868' : '#9AA095',
-                }]} />
-              </View>
-              <Text style={[localStyles.deviceName, {color: theme.colors.text}]}>
-                {device.name}
-              </Text>
-              <Text style={[localStyles.deviceModel, {color: theme.colors.textMuted}]}>
-                {device.model}
-              </Text>
-              <View style={[localStyles.deviceStatsRow, {
-                borderTopColor: theme.colors.border,
-                marginTop: 12,
-                paddingTop: 11,
-              }]}>
-                <Text style={[localStyles.deviceStats, {color: theme.colors.textSecondary}]}>
-                  {device.stats}
-                </Text>
-                <Text style={[localStyles.deviceBattery, {color: device.batteryColor}]}>
-                  {device.battery}
-                </Text>
-              </View>
-            </View>
-          ))}
-        </FadeUpView>
-
-        {/* NAS Section */}
+        {/* NAS card */}
         <FadeUpView delay={200}>
           <TouchableOpacity
-            style={[localStyles.nasCard, {
-              backgroundColor: theme.colors.bgCard,
-              borderColor: theme.colors.border,
-              borderRadius: r.lg,
-              padding: s.lg,
-              marginHorizontal: s.lg,
-              marginTop: s.md,
-            }]}
-            activeOpacity={0.7}
-            onPress={() => setNasOpen(true)}>
-            <View style={localStyles.nasHeader}>
-              <View style={[localStyles.nasIconWrap, {backgroundColor: '#2F3A33'}]}>
+            style={[styles.nasCard, {backgroundColor: theme.colors.bgCard, borderColor: theme.colors.border, marginHorizontal: s.lg}]}
+            onPress={() => setNasOpen(true)}
+            activeOpacity={0.7}>
+            <View style={styles.nasCardTop}>
+              <View style={[styles.nasIconWrap]}>
                 <ServerIcon size={24} color="#A9CBB0" />
               </View>
               <View style={{flex: 1}}>
-                <Text style={[localStyles.nasTitle, {color: theme.colors.text}]}>
-                  家庭记忆库 · NAS
-                </Text>
-                <Text style={[localStyles.nasModel, {color: theme.colors.textMuted}]}>
-                  拾光 N2 · 局域网直连 已连接
-                </Text>
+                <Text style={[styles.nasTitle, {color: theme.colors.text}]}>家庭记忆库 · NAS</Text>
+                <Text style={[styles.nasModel, {color: theme.colors.textMuted}]}>拾光 N2 · Wi-Fi 已连接</Text>
               </View>
-              <View style={[localStyles.nasStatusBadge, {backgroundColor: theme.colors.accent + '18'}]}>
-                <Text style={[localStyles.nasStatusText, {color: theme.colors.accent}]}>
-                  在线
-                </Text>
+              <View style={styles.nasOnlineBadge}>
+                <Text style={styles.nasOnlineText}>在线</Text>
               </View>
             </View>
-
-            {/* Storage bar */}
-            <View style={[localStyles.storageBar, {backgroundColor: theme.colors.bgSecondary}]}>
-              <View style={[localStyles.storageFill, {
-                width: '52%',
-                backgroundColor: theme.colors.accent,
-              }]} />
+            <View style={[styles.storageBar, {backgroundColor: theme.colors.bgSecondary}]}>
+              <View style={[styles.storageFill, {width: '52%'}]} />
             </View>
-
-            <View style={localStyles.storageInfo}>
-              <Text style={[localStyles.storageUsed, {color: theme.colors.textSecondary}]}>
-                已用 2.1 TB / 4 TB
-              </Text>
-              <Text style={[localStyles.storageAction, {color: theme.colors.accent}]}>
-                今日已备份 23 段 · 管理 ›
-              </Text>
+            <View style={styles.storageInfo}>
+              <Text style={[styles.storageUsed, {color: theme.colors.textSecondary}]}>已用 2.1 TB / 4 TB</Text>
+              <Text style={[styles.storageAction, {color: theme.colors.accent}]}>配网与管理 ›</Text>
             </View>
           </TouchableOpacity>
         </FadeUpView>
 
-        {/* Settings List */}
-        <FadeUpView delay={250}>
-          <View style={[localStyles.settingsList, {
-            backgroundColor: theme.colors.bgCard,
-            borderColor: theme.colors.border,
-            borderRadius: r.lg,
-            marginHorizontal: s.lg,
-            marginTop: s.md,
-            paddingVertical: 6,
-            paddingHorizontal: s.md,
-          }]}>
-            <View style={[localStyles.settingRow, {borderBottomColor: theme.colors.border}]}>
-              <View style={{flex: 1}}>
-                <Text style={[localStyles.settingTitle, {color: theme.colors.text}]}>
-                  无感记录
-                </Text>
-                <Text style={[localStyles.settingDesc, {color: theme.colors.textMuted}]}>
-                  眼镜自动留存值得记住的画面
-                </Text>
-              </View>
-              <Switch
-                value={autoRecord}
-                onValueChange={setAutoRecord}
-                trackColor={{false: '#D5D2C2', true: theme.colors.accent}}
-                thumbColor="#FFFFFF"
-              />
-            </View>
-            <View style={[localStyles.settingRow, {borderBottomColor: theme.colors.border}]}>
-              <View style={{flex: 1}}>
-                <Text style={[localStyles.settingTitle, {color: theme.colors.text}]}>
-                  心率与心情标记
-                </Text>
-                <Text style={[localStyles.settingDesc, {color: theme.colors.textMuted}]}>
-                  戒指为每个此刻附上当时的状态
-                </Text>
-              </View>
-              <Switch
-                value={heartRateMark}
-                onValueChange={setHeartRateMark}
-                trackColor={{false: '#D5D2C2', true: theme.colors.accent}}
-                thumbColor="#FFFFFF"
-              />
-            </View>
-          </View>
-        </FadeUpView>
-
-        {/* Invite family */}
-        <FadeUpView delay={300}>
+        {/* Family invite */}
+        <FadeUpView delay={240}>
           <TouchableOpacity
-            style={[localStyles.inviteCard, {
-              backgroundColor: '#E8EEDD',
-              borderColor: '#D8E2C9',
-              borderRadius: r.lg,
-              padding: s.sm + 7,
-              marginHorizontal: s.lg,
-              marginTop: s.md,
-              flexDirection: 'row',
-              alignItems: 'center',
-            }]}
+            style={[styles.familyCard, {marginHorizontal: s.lg}]}
             activeOpacity={0.7}>
             <FamilyIcon size={26} color="#3F8A82" />
-            <View style={{flex: 1, marginLeft: 13}}>
-              <Text style={[localStyles.inviteTitle, {color: theme.colors.text}]}>
-                邀请家人一起拾光
-              </Text>
-              <Text style={[localStyles.inviteDesc, {color: theme.colors.textSecondary}]}>
-                碰一碰，把记忆汇进同一个记忆库
-              </Text>
+            <View style={{flex: 1}}>
+              <Text style={[styles.familyTitle, {color: theme.colors.text}]}>邀请家人一起拾光</Text>
+              <Text style={[styles.familyDesc, {color: theme.colors.textSecondary}]}>碰一碰，把记忆汇进同一个记忆库</Text>
             </View>
-            <Text style={[localStyles.inviteArrow, {color: theme.colors.accent}]}>›</Text>
+            <Text style={{color: '#3F8A82', fontSize: 18}}>›</Text>
           </TouchableOpacity>
         </FadeUpView>
 
-        {/* More settings */}
-        <FadeUpView delay={350}>
-          <View style={[localStyles.moreSettings, {
+        {/* Settings list */}
+        <FadeUpView delay={280}>
+          <View style={[styles.settingsList, {
             backgroundColor: theme.colors.bgCard,
             borderColor: theme.colors.border,
-            borderRadius: r.lg,
             marginHorizontal: s.lg,
-            marginTop: s.md,
-            paddingVertical: 4,
-            paddingHorizontal: s.md,
           }]}>
-            <TouchableOpacity style={[localStyles.moreRow, {borderBottomColor: theme.colors.border}]}>
+            <TouchableOpacity style={[styles.settingRow, {borderBottomColor: theme.colors.border}]}>
               <LockIcon size={19} color="#7C8474" />
-              <Text style={[localStyles.moreText, {color: theme.colors.text, flex: 1}]}>
-                隐私与同步
-              </Text>
-              <Text style={[localStyles.moreArrow, {color: theme.colors.textMuted}]}>›</Text>
+              <Text style={[styles.settingText, {color: theme.colors.text}]}>隐私与同步</Text>
+              <Text style={{color: '#C3C8BB', fontSize: 17}}>›</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={localStyles.moreRow}>
+            <TouchableOpacity style={styles.settingRow}>
               <StarIcon size={19} color="#7C8474" />
-              <Text style={[localStyles.moreText, {color: theme.colors.text, flex: 1}]}>
-                AI 授权管理
-              </Text>
-              <Text style={[localStyles.moreMeta, {color: theme.colors.textMuted}]}>
-                阿里云百炼 · Qwen
-              </Text>
+              <Text style={[styles.settingText, {color: theme.colors.text}]}>AI 授权管理</Text>
+              <Text style={[styles.settingMeta, {color: theme.colors.textMuted}]}>阿里云百炼 · Qwen</Text>
             </TouchableOpacity>
           </View>
         </FadeUpView>
 
-        {/* Theme switcher (for demo) */}
-        <FadeUpView delay={400}>
+        {/* Logout */}
+        <FadeUpView delay={320}>
           <TouchableOpacity
-            style={[localStyles.themeSwitcher, {
+            style={[styles.logoutBtn, {
               marginHorizontal: s.lg,
               marginTop: s.md,
-            }]}
-            onPress={handleThemeChange}>
-            <Text style={[localStyles.themeSwitcherText, {color: theme.colors.accent}]}>
-              当前主题: {theme.name} (点击切换)
-            </Text>
-          </TouchableOpacity>
-        </FadeUpView>
-
-        {/* Logout button */}
-        <FadeUpView delay={450}>
-          <TouchableOpacity
-            style={[localStyles.logoutBtn, {
-              marginHorizontal: s.lg,
-              marginTop: s.md,
-              marginBottom: s.xl,
               backgroundColor: theme.colors.bgCard,
               borderColor: theme.colors.border,
-              borderRadius: r.lg,
-              padding: 15,
-              borderWidth: 1,
             }]}
             onPress={handleLogout}>
-            <Text style={[localStyles.logoutBtnText, {color: '#C0584A'}]}>
-              {isGuest ? '退出游客模式' : '退出登录'}
-            </Text>
+            <Text style={styles.logoutText}>{isGuest ? '退出游客模式' : '退出登录'}</Text>
           </TouchableOpacity>
         </FadeUpView>
       </ScrollView>
 
+      {/* Overlays */}
       <NasPage visible={nasOpen} onClose={() => setNasOpen(false)} />
+      <DevicesOverlay
+        visible={devicesOpen}
+        onClose={() => setDevicesOpen(false)}
+        onOpenNas={() => setNasOpen(true)}
+      />
+      <RechargeSheet visible={rechargeOpen} onClose={() => setRechargeOpen(false)} />
     </View>
   );
 }
 
-const localStyles = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {flex: 1},
   scrollView: {flex: 1},
-  header: {},
-  profileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  avatar: {
+  profileSection: {},
+  profileRow: {flexDirection: 'row', alignItems: 'center', gap: 14},
+  avatarOuter: {
     width: 62,
     height: 62,
     borderRadius: 31,
+    backgroundColor: '#3F8A82',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  profileName: {
-    fontSize: 21,
-    fontWeight: '700',
+  avatarInner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#A9CBB0',
+    opacity: 0.55,
   },
-  profileId: {
-    fontSize: 12,
-    marginTop: 3,
+  profileName: {fontSize: 21, fontWeight: '700'},
+  profileId: {fontSize: 12, marginTop: 3, fontVariant: ['tabular-nums'] as any},
+  qrBtn: {borderWidth: 1, borderRadius: 16, padding: 8},
+  // Points card
+  pointsCard: {
+    backgroundColor: '#2F3A33',
+    borderRadius: 22,
+    padding: 18,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  settingsBtn: {
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 8,
+  pointsGlow: {
+    position: 'absolute',
+    right: -20,
+    top: -20,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(247,224,171,0.22)',
   },
-  sectionTitleRow: {
-    marginBottom: 11,
-    marginHorizontal: 2,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  devicesRow: {
+  pointsTop: {
     flexDirection: 'row',
-    gap: 11,
-    marginBottom: 11,
+    alignItems: 'center',
+    gap: 10,
   },
+  pointsLeft: {flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1},
+  pointsLabel: {fontSize: 13, color: '#C9D2C5', fontWeight: '600', letterSpacing: 0.5},
+  pointsRechargePill: {
+    backgroundColor: 'rgba(242,204,131,0.16)',
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 4,
+  },
+  pointsRechargeText: {fontSize: 12, color: '#F2CC83', fontWeight: '700'},
+  pointsNumRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    marginTop: 13,
+  },
+  pointsNum: {fontSize: 34, fontWeight: '700', color: '#EFEAD9', lineHeight: 40},
+  pointsUnit: {fontSize: 12, color: '#A9B0A1'},
+  pointsHint: {fontSize: 11.5, color: '#A9B0A1', marginTop: 8},
+  // Section title
+  sectionTitle: {fontSize: 15, fontWeight: '600', letterSpacing: 0.5},
+  // Device cards
+  devicesRow: {flexDirection: 'row', gap: 11, marginBottom: 11},
   deviceCard: {
+    flex: 1,
     borderWidth: 1,
+    borderRadius: 20,
+    padding: 15,
   },
-  deviceHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 11,
-  },
-  deviceIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deviceStatusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  deviceName: {
-    fontSize: 14.5,
-    fontWeight: '700',
-  },
-  deviceModel: {
-    fontSize: 11,
-    marginTop: 1,
-  },
-  deviceStatsRow: {
+  deviceCardHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 11},
+  deviceIconWrap: {width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center'},
+  deviceOnlineDot: {width: 7, height: 7, borderRadius: 4},
+  deviceName: {fontSize: 14.5, fontWeight: '700'},
+  deviceModel: {fontSize: 11, marginTop: 1},
+  deviceStats: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderTopWidth: 1,
+    marginTop: 12,
+    paddingTop: 11,
   },
-  deviceStats: {
-    fontSize: 11.5,
-  },
-  deviceBattery: {
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
+  deviceStatsText: {fontSize: 11.5},
+  deviceBattery: {fontSize: 11.5, fontWeight: '600', fontVariant: ['tabular-nums'] as any},
+  // NAS card
   nasCard: {
     borderWidth: 1,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 11,
   },
-  nasHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 13,
-  },
+  nasCardTop: {flexDirection: 'row', alignItems: 'center', gap: 13, marginBottom: 13},
   nasIconWrap: {
     width: 44,
     height: 44,
     borderRadius: 13,
+    backgroundColor: '#2F3A33',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  nasTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  nasModel: {
-    fontSize: 11.5,
-    marginTop: 2,
-  },
-  nasStatusBadge: {
+  nasTitle: {fontSize: 15, fontWeight: '700'},
+  nasModel: {fontSize: 11.5, marginTop: 2},
+  nasOnlineBadge: {
+    backgroundColor: 'rgba(63,138,130,0.12)',
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  nasStatusText: {
-    fontSize: 10.5,
-    fontWeight: '700',
-  },
-  storageBar: {
-    height: 8,
-    borderRadius: 5,
-    marginTop: 18,
-    overflow: 'hidden',
-  },
-  storageFill: {
-    height: '100%',
-    borderRadius: 5,
-  },
-  storageInfo: {
+  nasOnlineText: {fontSize: 10.5, fontWeight: '700', color: '#3F8A82'},
+  storageBar: {height: 8, borderRadius: 5, overflow: 'hidden'},
+  storageFill: {height: '100%', borderRadius: 5, backgroundColor: '#3F8A82'},
+  storageInfo: {flexDirection: 'row', justifyContent: 'space-between', marginTop: 8},
+  storageUsed: {fontSize: 11.5},
+  storageAction: {fontSize: 11.5, fontWeight: '600'},
+  // Family card
+  familyCard: {
+    backgroundColor: '#E8EEDD',
+    borderWidth: 1,
+    borderColor: '#D8E2C9',
+    borderRadius: 20,
+    padding: 15,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 8,
+    alignItems: 'center',
+    gap: 13,
+    marginBottom: 11,
   },
-  storageUsed: {
-    fontSize: 11.5,
-  },
-  storageAction: {
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
+  familyTitle: {fontSize: 14, fontWeight: '700'},
+  familyDesc: {fontSize: 11.5, marginTop: 2},
+  // Settings list
   settingsList: {
     borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    marginBottom: 11,
   },
   settingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-  },
-  settingTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  settingDesc: {
-    fontSize: 11.5,
-    marginTop: 2,
-  },
-  inviteCard: {
-    borderWidth: 1,
-  },
-  inviteTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  inviteDesc: {
-    fontSize: 11.5,
-    marginTop: 2,
-  },
-  inviteArrow: {
-    fontSize: 18,
-  },
-  moreSettings: {
-    borderWidth: 1,
-  },
-  moreRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 11,
     paddingVertical: 14,
     borderBottomWidth: 1,
   },
-  moreText: {
-    fontSize: 14,
-  },
-  moreArrow: {
-    fontSize: 17,
-  },
-  moreMeta: {
-    fontSize: 11,
-  },
-  themeSwitcher: {
-    alignItems: 'center',
-    paddingVertical: 16,
-  },
-  themeSwitcherText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
+  settingText: {flex: 1, fontSize: 14},
+  settingMeta: {fontSize: 11},
+  // Logout
   logoutBtn: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 15,
     alignItems: 'center',
   },
-  logoutBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  logoutText: {fontSize: 14, fontWeight: '600', color: '#C0584A'},
 });

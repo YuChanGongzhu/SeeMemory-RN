@@ -11,6 +11,8 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useTheme} from '../theme/ThemeProvider';
 import type {Theme} from '../theme/index';
 import {GlassesIcon, RingIcon, MicIcon} from '../components/Icons';
+import {DevicesOverlay} from '../components/DevicesOverlay';
+import {NasPage} from '../components/NasPage';
 import {AnimatedOrb, ShimmerEffect, FadeUpView} from '../components/Animated';
 import {CapturePanel} from '../components/CapturePanel';
 import {MomentDetail} from '../components/MomentDetail';
@@ -121,10 +123,12 @@ function MomentCard({moment, theme, onPress}: {moment: Moment; theme: Theme; onP
         <Text style={[localStyles.momentTime, {color: theme.colors.text, fontFamily: theme.fonts.mono}]}>
           {moment.time}
         </Text>
-        <View style={[localStyles.momentIcon, {backgroundColor: theme.colors.bgSecondary}]}>
+        <View style={[localStyles.momentIcon, {
+          backgroundColor: moment.source === 'glasses' ? '#DCEAE6' : moment.source === 'ring' ? '#E8EEDD' : '#F2E6D4',
+        }]}>
           {getSourceIcon(moment.source)}
         </View>
-        <Text style={[localStyles.momentSource, {color: theme.colors.textMuted}]}>
+        <Text style={[localStyles.momentSource, {color: moment.source === 'glasses' ? '#3F8A82' : moment.source === 'ring' ? '#7FA868' : '#C2803C'}]}>
           {moment.sourceLabel}
         </Text>
       </View>
@@ -135,11 +139,14 @@ function MomentCard({moment, theme, onPress}: {moment: Moment; theme: Theme; onP
         <Text style={[localStyles.momentDesc, {color: theme.colors.textSecondary}]} numberOfLines={2}>
           {moment.desc}
         </Text>
-        <View style={[localStyles.emotionChip, {backgroundColor: theme.colors.bgSecondary}]}>
-          <View style={[localStyles.emotionDot, {backgroundColor: moment.emotion.color}]} />
-          <Text style={[localStyles.emotionText, {color: theme.colors.textSecondary}]}>
-            {moment.emotion.label}
-          </Text>
+        <View style={localStyles.emotionRow}>
+          <View style={[localStyles.emotionChip, {backgroundColor: theme.colors.bgSecondary}]}>
+            <View style={[localStyles.emotionDot, {backgroundColor: moment.emotion.color}]} />
+            <Text style={[localStyles.emotionText, {color: theme.colors.textSecondary}]}>
+              {moment.emotion.label}
+            </Text>
+          </View>
+          <Text style={[localStyles.momentDeviceLabel, {color: '#A7AC9E'}]}>{moment.sourceLabel}</Text>
         </View>
       </View>
       {moment.hasImg && (
@@ -165,6 +172,8 @@ export function NowScreen() {
   const [selectedMoment, setSelectedMoment] = useState<Moment | null>(null);
   const [selectedSummary, setSelectedSummary] = useState<any>(null);
   const [diaryOpen, setDiaryOpen] = useState(false);
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const [nasOpen, setNasOpen] = useState(false);
 
   const s = theme.spacing;
   const r = theme.radius;
@@ -200,7 +209,11 @@ export function NowScreen() {
               paddingBottom: s.xl + 16,
               paddingHorizontal: s.lg,
               backgroundColor: '#CFE6EA',
+              overflow: 'hidden',
             }]}>
+            {/* Gradient overlay: blends #CFE6EA → #D9EADE → #E7EFDC */}
+            <View style={{position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%', backgroundColor: '#D9EADE', opacity: 0.65, pointerEvents: 'none'}} />
+            <View style={{position: 'absolute', bottom: 0, left: 0, right: 0, height: '30%', backgroundColor: '#E7EFDC', opacity: 0.7, pointerEvents: 'none'}} />
             <AnimatedOrb
               size={46}
               colors={['#FBE9BE', '#F2CC83']}
@@ -215,13 +228,14 @@ export function NowScreen() {
                 <Text style={[localStyles.seasonText, {color: theme.seasons?.summer || theme.colors.accent}]}>夏</Text>
                 <Text style={[localStyles.seasonSubtext, {color: theme.colors.textSecondary}]}>仲夏 · 芒种</Text>
               </View>
-              <View style={[localStyles.deviceBadge, {
-                backgroundColor: 'rgba(255,255,255,0.6)',
-                borderColor: 'rgba(255,255,255,0.7)',
-              }]}>
+              <TouchableOpacity style={[localStyles.deviceBadge, {
+                backgroundColor: 'rgba(255,255,255,0.62)',
+                borderColor: 'rgba(255,255,255,0.72)',
+              }]} activeOpacity={0.7} onPress={() => setDevicesOpen(true)}>
                 <View style={[localStyles.deviceDot, {backgroundColor: theme.colors.accent}]} />
                 <Text style={[localStyles.deviceText, {color: theme.colors.textSecondary}]}>眼镜 · 戒指 · NAS</Text>
-              </View>
+                <Text style={{color: '#6E8C7E', fontSize: 13, fontWeight: '700', marginLeft: 2}}>›</Text>
+              </TouchableOpacity>
             </View>
             <Text style={[localStyles.greeting, {color: theme.colors.text}]}>{getGreeting()}，春水</Text>
             <Text style={[localStyles.dateInfo, {color: theme.colors.textSecondary}]}>6月12日 · 周五 · 多云转晴 · 28°C</Text>
@@ -304,6 +318,8 @@ export function NowScreen() {
 
       {/* Overlays */}
       <CapturePanel visible={captureOpen} onClose={() => setCaptureOpen(false)} />
+      <DevicesOverlay visible={devicesOpen} onClose={() => setDevicesOpen(false)} onOpenNas={() => { setDevicesOpen(false); setNasOpen(true); }} />
+      <NasPage visible={nasOpen} onClose={() => setNasOpen(false)} />
       <MomentDetail
         visible={!!selectedMoment}
         moment={selectedMoment}
@@ -323,7 +339,7 @@ export function NowScreen() {
 const localStyles = StyleSheet.create({
   container: {flex: 1},
   scrollView: {flex: 1},
-  header: {borderBottomLeftRadius: 32, borderBottomRightRadius: 32},
+  header: {},
   badgeRow: {flexDirection: 'row', justifyContent: 'space-between', marginBottom: 18},
   seasonBadge: {flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5},
   seasonText: {fontSize: 13, fontWeight: '700'},
@@ -358,7 +374,9 @@ const localStyles = StyleSheet.create({
   momentContent: {flex: 1},
   momentTitle: {fontSize: 14.5, fontWeight: '700'},
   momentDesc: {fontSize: 12.5, lineHeight: 19, marginTop: 4},
-  emotionChip: {flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3, marginTop: 8},
+  emotionRow: {flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 8},
+  emotionChip: {flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3},
+  momentDeviceLabel: {fontSize: 10.5},
   emotionDot: {width: 6, height: 6, borderRadius: 3},
   emotionText: {fontSize: 11.5, fontWeight: '500'},
   momentThumb: {width: 70, marginLeft: 13, justifyContent: 'flex-end', padding: 7},
