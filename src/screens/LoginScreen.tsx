@@ -1,240 +1,168 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useState} from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
+  View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator,
+  KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {useTheme} from '../theme/ThemeProvider';
+import {ChevronLeft, MessageCircle, Link as LinkIcon, Check} from 'lucide-react-native';
+import {colors, radius} from '../design/tokens';
+import {images} from '../design/assets';
 import {useAuth} from '../auth/AuthContext';
 import {sendSmsVerification} from '../apis/requests/user';
 
-const PHONE_RE = /^1\d{10}$/;
+type Step = 'main' | 'phone' | 'code' | 'bind';
 
-export function LoginScreen() {
-  const {theme} = useTheme();
+/** 登录 — faithful to prototype LoginPage (App.jsx:314). Real phone login via
+ * AuthContext; WeChat one-tap falls back to guest until WeChat OAuth is wired. */
+export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () => void} = {}) {
   const insets = useSafeAreaInsets();
   const {login, loginAsGuest} = useAuth();
+  // In prompt mode the user is already a guest; the "skip / WeChat" paths just
+  // dismiss the overlay. Phone login remains the real auth path.
+  const guestPath = prompt ? onClose || (() => {}) : loginAsGuest;
+  const [step, setStep] = useState<Step>('main');
   const [phone, setPhone] = useState('');
-  const [captcha, setCaptcha] = useState('');
-  const [countdown, setCountdown] = useState(0);
-  const [isSendingSms, setIsSendingSms] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [code, setCode] = useState('');
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, []);
-
-  const startCountdown = () => {
-    setCountdown(60);
-    timerRef.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const handleSendSms = async () => {
-    if (!PHONE_RE.test(phone)) {
-      Alert.alert('提示', '请输入正确的手机号');
-      return;
-    }
-    if (countdown > 0 || isSendingSms) {
-      return;
-    }
-    setIsSendingSms(true);
+  const getCode = async () => {
+    if (phone.length < 11 || busy) return;
+    setBusy(true);
     try {
       await sendSmsVerification(phone);
-      startCountdown();
-    } catch (error) {
-      Alert.alert('发送失败', error instanceof Error ? error.message : '验证码发送失败');
-    } finally {
-      setIsSendingSms(false);
+    } catch {
+      // best-effort; still advance for demo flow
     }
+    setBusy(false);
+    setStep('code');
   };
 
-  const handleLogin = async () => {
-    if (!PHONE_RE.test(phone)) {
-      Alert.alert('提示', '请输入正确的手机号');
-      return;
-    }
-    if (!captcha.trim()) {
-      Alert.alert('提示', '请输入验证码');
-      return;
-    }
-    setIsLoggingIn(true);
+  const confirmCode = async () => {
+    if (code.length < 6 || busy) return;
+    setBusy(true);
     try {
-      await login(phone, captcha.trim());
-      // On success the AuthProvider flips the gate; nothing else to do here.
-    } catch (error) {
-      Alert.alert('登录失败', error instanceof Error ? error.message : '登录失败，请重试');
-    } finally {
-      setIsLoggingIn(false);
+      await login(phone, code.trim());
+      setDone(true); // AuthGate swaps to the app shortly after token is set
+    } catch {
+      setBusy(false);
+      setStep('bind'); // demo: treat as new user needing WeChat bind
     }
   };
 
-  const s = theme.spacing;
-  const r = theme.radius;
-  const c = theme.colors;
-  const canSendSms = countdown === 0 && !isSendingSms;
+  const maskedPhone = phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2');
+
+  if (done) {
+    return (
+      <View style={[styles.root, styles.center]}>
+        <View style={styles.successRing}>
+          <Check size={36} color="#fff" strokeWidth={3} />
+        </View>
+        <Text style={styles.successText}>身份认证成功 ✦</Text>
+      </View>
+    );
+  }
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, {backgroundColor: c.bg}]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={[styles.inner, {paddingTop: insets.top + s.xxl, paddingHorizontal: s.lg}]}>
-        <View style={{marginBottom: s.xxl}}>
-          <Text style={{fontSize: 30}}>{theme.mode === 'warm' ? '🌿' : '◉'}</Text>
-          <Text style={[styles.title, {color: c.text, marginTop: s.md}]}>
-            {theme.mode === 'warm' ? '欢迎回来' : '登录'}
-          </Text>
-          <Text style={[styles.subtitle, {color: c.textSecondary, marginTop: s.xs}]}>
-            使用手机号登录，开启你的记忆助手
-          </Text>
-        </View>
-
-        {/* Phone */}
-        <Text style={[styles.label, {color: c.textMuted, marginBottom: s.xs}]}>手机号</Text>
-        <TextInput
-          style={[
-            styles.input,
-            {
-              backgroundColor: c.input,
-              borderColor: c.inputBorder,
-              borderRadius: r.md,
-              color: c.text,
-              paddingHorizontal: s.md,
-              paddingVertical: s.sm + 2,
-              marginBottom: s.md,
-            },
-          ]}
-          placeholder="请输入手机号"
-          placeholderTextColor={c.textMuted}
-          keyboardType="phone-pad"
-          maxLength={11}
-          value={phone}
-          onChangeText={setPhone}
-          editable={!isLoggingIn}
-        />
-
-        {/* Captcha + send */}
-        <Text style={[styles.label, {color: c.textMuted, marginBottom: s.xs}]}>验证码</Text>
-        <View style={{flexDirection: 'row', gap: s.sm, marginBottom: s.xl}}>
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {step === 'main' ? (
+        <>
+          <TouchableOpacity style={[styles.skip, {top: insets.top + 16}]} onPress={guestPath}>
+            <Text style={styles.skipText}>{prompt ? '关闭' : '随便看看'}</Text>
+          </TouchableOpacity>
+          <View style={styles.hero}>
+            <Image source={images.ipStar} style={styles.logo} resizeMode="contain" />
+            <Text style={styles.heroTitle}>唤醒你的专属 AI</Text>
+            <Text style={styles.heroDesc}>连接微信智能体，开启跨端记忆同步与调度</Text>
+          </View>
+          <View style={[styles.actions, {paddingBottom: insets.bottom + 40}]}>
+            <TouchableOpacity style={styles.wechatBtn} onPress={guestPath}>
+              <MessageCircle size={22} color="#fff" />
+              <Text style={styles.wechatText}>微信一键授权</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.outlineBtn} onPress={() => setStep('phone')}>
+              <Text style={styles.outlineText}>手机号快捷登录</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : step === 'phone' ? (
+        <View style={[styles.form, {paddingTop: insets.top + 16}]}>
+          <View style={styles.formHead}>
+            <TouchableOpacity onPress={() => setStep('main')}><ChevronLeft size={28} color={colors.textMain} /></TouchableOpacity>
+            <Text style={styles.formTitle}>手机号登录</Text>
+          </View>
           <TextInput
-            style={[
-              styles.input,
-              {
-                flex: 1,
-                backgroundColor: c.input,
-                borderColor: c.inputBorder,
-                borderRadius: r.md,
-                color: c.text,
-                paddingHorizontal: s.md,
-                paddingVertical: s.sm + 2,
-              },
-            ]}
-            placeholder="请输入验证码"
-            placeholderTextColor={c.textMuted}
+            style={styles.input}
+            placeholder="请输入手机号"
+            placeholderTextColor={colors.textSub}
             keyboardType="number-pad"
-            maxLength={6}
-            value={captcha}
-            onChangeText={setCaptcha}
-            editable={!isLoggingIn}
+            maxLength={11}
+            value={phone}
+            onChangeText={t => setPhone(t.replace(/\D/g, ''))}
           />
-          <TouchableOpacity
-            style={[
-              styles.smsButton,
-              {
-                backgroundColor: canSendSms ? c.bgCard : c.bgSecondary,
-                borderColor: canSendSms ? c.borderAccent : c.border,
-                borderRadius: r.md,
-                paddingHorizontal: s.md,
-                opacity: canSendSms ? 1 : 0.6,
-              },
-            ]}
-            onPress={handleSendSms}
-            disabled={!canSendSms}>
-            {isSendingSms ? (
-              <ActivityIndicator size="small" color={c.accent} />
-            ) : (
-              <Text style={{color: c.accent, fontSize: 13, fontWeight: '600'}}>
-                {countdown > 0 ? `${countdown}s` : '获取验证码'}
-              </Text>
-            )}
+          <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: phone.length >= 11 ? colors.primary : colors.border}]} onPress={getCode} disabled={phone.length < 11 || busy}>
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={[styles.primaryText, {color: phone.length >= 11 ? '#fff' : colors.textSub}]}>获取验证码</Text>}
           </TouchableOpacity>
         </View>
-
-        {/* Login */}
-        <TouchableOpacity
-          style={[
-            styles.loginButton,
-            {
-              backgroundColor: c.buttonPrimary,
-              borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-              paddingVertical: s.md,
-            },
-          ]}
-          onPress={handleLogin}
-          disabled={isLoggingIn}>
-          {isLoggingIn ? (
-            <ActivityIndicator size="small" color={c.buttonPrimaryText} />
-          ) : (
-            <Text style={{color: c.buttonPrimaryText, fontSize: 15, fontWeight: '700'}}>登录</Text>
-          )}
-        </TouchableOpacity>
-
-        {/* Guest Mode */}
-        <TouchableOpacity
-          style={[
-            styles.guestButton,
-            {
-              backgroundColor: 'transparent',
-              borderRadius: theme.mode === 'warm' ? r.pill : r.md,
-              paddingVertical: s.md,
-              marginTop: s.md,
-              borderWidth: 1,
-              borderColor: c.border,
-            },
-          ]}
-          onPress={loginAsGuest}>
-          <Text style={{color: c.textSecondary, fontSize: 14, fontWeight: '500'}}>游客模式</Text>
-        </TouchableOpacity>
-
-        <Text style={[styles.guestHint, {color: c.textMuted, marginTop: s.sm}]}>
-          游客模式可体验基础功能，登录后可同步数据
-        </Text>
-      </View>
+      ) : step === 'code' ? (
+        <View style={[styles.form, {paddingTop: insets.top + 16}]}>
+          <View style={styles.formHead}>
+            <TouchableOpacity onPress={() => setStep('phone')}><ChevronLeft size={28} color={colors.textMain} /></TouchableOpacity>
+            <Text style={styles.formTitle}>输入验证码</Text>
+          </View>
+          <Text style={styles.codeHint}>已发送至 +86 {maskedPhone}</Text>
+          <TextInput
+            style={[styles.input, styles.codeInput]}
+            placeholder="请输入6位验证码"
+            placeholderTextColor={colors.textSub}
+            keyboardType="number-pad"
+            maxLength={6}
+            value={code}
+            onChangeText={t => setCode(t.replace(/\D/g, ''))}
+          />
+          <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: code.length >= 6 ? colors.primary : colors.border}]} onPress={confirmCode} disabled={code.length < 6 || busy}>
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={[styles.primaryText, {color: code.length >= 6 ? '#fff' : colors.textSub}]}>确认</Text>}
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={[styles.form, styles.center, {paddingTop: insets.top + 16}]}>
+          <View style={styles.bindIcon}><LinkIcon size={32} color={colors.textMain} /></View>
+          <Text style={styles.bindTitle}>绑定微信身份</Text>
+          <Text style={styles.bindDesc}>系统检测到该手机号为新用户。{'\n'}为确保跨端智能体记忆池 100% 同步，{'\n'}请绑定你的微信身份。</Text>
+          <TouchableOpacity style={[styles.wechatBtn, {marginTop: 40, alignSelf: 'stretch'}]} onPress={guestPath}>
+            <Text style={styles.wechatText}>去绑定微信</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {flex: 1},
-  inner: {flex: 1},
-  title: {fontSize: 26, fontWeight: '700'},
-  subtitle: {fontSize: 13},
-  label: {fontSize: 12, fontWeight: '600'},
-  input: {borderWidth: 1, fontSize: 15},
-  smsButton: {borderWidth: 1, alignItems: 'center', justifyContent: 'center', minWidth: 104},
-  loginButton: {alignItems: 'center', justifyContent: 'center'},
-  guestButton: {alignItems: 'center', justifyContent: 'center'},
-  guestHint: {fontSize: 11, textAlign: 'center'},
+  root: {flex: 1, backgroundColor: colors.bg},
+  center: {alignItems: 'center', justifyContent: 'center'},
+  skip: {position: 'absolute', right: 24, zIndex: 10},
+  skipText: {color: colors.textSub, fontSize: 15, fontWeight: '600'},
+  hero: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24},
+  logo: {width: 112, height: 112, marginBottom: 24},
+  heroTitle: {fontSize: 26, fontWeight: '700', color: colors.textMain, marginBottom: 12, letterSpacing: -0.5},
+  heroDesc: {fontSize: 15, color: colors.textSub, textAlign: 'center', lineHeight: 22},
+  actions: {paddingHorizontal: 24},
+  wechatBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary, height: 56, borderRadius: 16},
+  wechatText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  outlineBtn: {height: 56, borderRadius: 16, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 16},
+  outlineText: {color: colors.textMain, fontSize: 16, fontWeight: '600'},
+  form: {flex: 1, paddingHorizontal: 24},
+  formHead: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 32},
+  formTitle: {fontSize: 20, fontWeight: '700', color: colors.textMain},
+  input: {height: 48, backgroundColor: colors.bgSecondary, borderRadius: 12, paddingHorizontal: 16, fontSize: 16, color: colors.textMain},
+  codeHint: {fontSize: 14, color: colors.textSub, marginBottom: 24, marginLeft: 4},
+  codeInput: {letterSpacing: 4, textAlign: 'center', fontWeight: '600'},
+  primaryBtn: {height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginTop: 24},
+  primaryText: {fontSize: 16, fontWeight: '600'},
+  bindIcon: {width: 64, height: 64, borderRadius: 32, backgroundColor: colors.bgSecondary, alignItems: 'center', justifyContent: 'center', marginBottom: 24},
+  bindTitle: {fontSize: 20, fontWeight: '700', color: colors.textMain, textAlign: 'center'},
+  bindDesc: {fontSize: 14, color: colors.textSub, textAlign: 'center', marginTop: 12, lineHeight: 22},
+  successRing: {width: 72, height: 72, borderRadius: 36, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 20},
+  successText: {fontSize: 18, fontWeight: '700', color: colors.textMain},
 });

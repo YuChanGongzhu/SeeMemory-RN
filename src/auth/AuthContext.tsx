@@ -149,6 +149,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
       await saveToken(token);
       setAuthToken(token);
       setAuthTokenState(token);
+      setIsGuest(false);
       try {
         const info = await getUserInfo();
         setUser(info);

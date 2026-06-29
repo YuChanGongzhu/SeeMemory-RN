@@ -1,3 +1,10 @@
+# 强制 React Native 从源码编译（关闭 0.84 的 prebuilt 核心 / 预编译依赖）。
+# 原因：use_frameworks! :dynamic + New Arch 下，预编译的 React-Core-prebuilt 与
+# 源码编译的 ReactCodegen 符号对不上，新增任何 pod 都会触发 ReactCodegen 链接器
+# 报错（getDebug*/Sealable/vtable 等 undefined symbol）。从源码编译即可消除该不一致。
+ENV['RCT_USE_PREBUILT_RNCORE'] = '0'
+ENV['RCT_USE_RN_DEP'] = '0'
+
 # Resolve react_native_pods.rb with node to allow for hoisting
 require Pod::Executable.execute_command('node', ['-p',
   'require.resolve(
@@ -40,6 +47,9 @@ target 'RingMemoryApp' do
 
   # Explicitly add RNWorklets for reanimated v4
   pod 'RNWorklets', :path => '../node_modules/react-native-worklets'
+
+  # MR20「记忆粒」原生 BLE 模块（独立 LocalPod，纯 CoreBluetooth，与 ring 无关）
+  pod 'RTNMr20Module', :path => './LocalPods/RTNMr20Module'
 
   use_react_native!(
     :path => config[:reactNativePath],

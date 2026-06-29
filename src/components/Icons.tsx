@@ -212,3 +212,126 @@ export function SendIcon({size = 18, color = 'currentColor', strokeWidth = 1.8}:
     </Svg>
   );
 }
+
+// 上箭头发送图标（对话框发送按钮）
+export function UpArrowIcon({size = 19, color = 'currentColor', strokeWidth = 2}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M12 19V5M6 11l6-6 6 6" />
+    </Svg>
+  );
+}
+
+// 标签图标（线索标记）
+export function TagIcon({size = 14, color = '#7C8474', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M20.5 13 13 20.5a2 2 0 0 1-2.8 0L3.5 13.8A2 2 0 0 1 3 12.4V5a2 2 0 0 1 2-2h7.4a2 2 0 0 1 1.4.6l6.7 6.6a2 2 0 0 1 0 2.8Z" />
+      <Circle cx="7.5" cy="7.5" r="1.3" />
+    </Svg>
+  );
+}
+
+// 排序图标（双向箭头）
+export function SortIcon({size = 15, color = '#3F8A82', strokeWidth = 1.8}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M7 4v16M7 20l-3-3M7 20l3-3M17 4V20M17 4l-3 3M17 4l3 3" />
+    </Svg>
+  );
+}
+
+// 播放图标（实心三角）
+export function PlayIcon({size = 12, color = '#fff'}: {size?: number; color?: string}) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path d="M8 5.4 18.5 12 8 18.6Z" fill={color} />
+    </Svg>
+  );
+}
+
+// 铃铛图标（提醒）
+export function BellIcon({size = 14, color = '#6B7363', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" />
+      <Path d="M10 20a2 2 0 0 0 4 0" />
+    </Svg>
+  );
+}
+
+// 对勾图标（完成状态）
+export function CheckIcon({size = 13, color = '#fff', strokeWidth = 2.5}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M5 12l5 5L20 7" />
+    </Svg>
+  );
+}
+
+// 首页图标
+export function HomeIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M4 10.5 12 4l8 6.5V19a1.4 1.4 0 0 1-1.4 1.4H5.4A1.4 1.4 0 0 1 4 19z" />
+      <Path d="M9.5 20.4v-6h5v6" />
+    </Svg>
+  );
+}
+
+// 记忆粒图标（芯片/颗粒）
+export function GrainIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="7" y="7" width="10" height="10" rx="2.4" />
+      <Path d="M10 3.5V6M14 3.5V6M10 18v2.5M14 18v2.5M3.5 10H6M3.5 14H6M18 10h2.5M18 14h2.5" />
+    </Svg>
+  );
+}
+
+// 沉淀图标（层叠）
+export function ArchiveIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M12 3.5 20.5 8 12 12.5 3.5 8z" />
+      <Path d="M3.5 12 12 16.5 20.5 12M3.5 16 12 20.5 20.5 16" />
+    </Svg>
+  );
+}
+
+// 待办图标（清单）
+export function TodoIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M9 6h11M9 12h11M9 18h11" />
+      <Path d="M4 5.6 5 6.6 6.8 4.8M4 11.6 5 12.6 6.8 10.8M4 17.6 5 18.6 6.8 16.8" />
+    </Svg>
+  );
+}
+
+// 抽屉菜单图标
+export function MenuIcon({size = 22, color = 'currentColor', strokeWidth = 1.8}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M4 7h16M4 12h16M4 17h11" />
+    </Svg>
+  );
+}
+
+// 关闭图标
+export function CloseIcon({size = 22, color = 'currentColor', strokeWidth = 1.8}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M6 6l12 12M18 6 6 18" />
+    </Svg>
+  );
+}
+
+// 右箭头（列表项）
+export function ChevronRightIcon({size = 18, color = 'currentColor', strokeWidth = 1.8}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="M9 6l6 6-6 6" />
+    </Svg>
+  );
+}
