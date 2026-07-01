@@ -84,8 +84,8 @@ function fragmentToCard(f: MemoryFragment): MemoryCardModel {
   const audioFiles = files.filter(m => m.mime_type?.startsWith('audio'));
   const images = imageFiles.map(m => m.url);
 
-  // 时间流：AI 概要 → 文本节点（默认「高光」视图）；录音 files → 音频节点（「全量」视图可播放，
-  // 转写文案放在 content，仿原型 renderTimelineNode 的 audio 暗色胶囊 + 转写块）。
+  // 时间流：AI 概要 → 文本节点（默认「高光」视图）；图片 files → 图片节点、录音 files → 音频节点
+  // （「全量」视图里图片直接铺图、录音可播放），转写/描述放在 content，仿原型 renderTimelineNode。
   const timeline = f.timeline || [];
   const records: TimelineRecord[] = timeline.map((t, i) => ({
     id: i,
@@ -93,14 +93,25 @@ function fragmentToCard(f: MemoryFragment): MemoryCardModel {
     type: 'text',
     content: t.content,
   }));
-  audioFiles.forEach((m, i) => {
-    // files 无录音时间，按序等比锚定到概要时间点，保证「全量」视图里大致按时序排列。
-    const anchor = timeline.length
-      ? timeline[Math.min(timeline.length - 1, Math.floor((i * timeline.length) / audioFiles.length))].time
+  // files 无独立时间，按序等比锚定到概要时间点，保证「全量」视图里大致按时序排列。
+  const anchorTime = (i: number, count: number) =>
+    timeline.length
+      ? timeline[Math.min(timeline.length - 1, Math.floor((i * timeline.length) / count))].time
       : shortTime(f.start_time);
+  imageFiles.forEach((m, i) => {
     records.push({
       id: timeline.length + i,
-      time: anchor,
+      time: anchorTime(i, imageFiles.length),
+      type: 'image',
+      url: m.url,
+      content: m.description || undefined,
+      name: m.file_name || undefined,
+    });
+  });
+  audioFiles.forEach((m, i) => {
+    records.push({
+      id: timeline.length + imageFiles.length + i,
+      time: anchorTime(i, audioFiles.length),
       type: 'audio',
       name: `语音记录 ${i + 1}`,
       content: m.description || undefined,

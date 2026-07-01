@@ -11,6 +11,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {uploadAudioSegment} from './api';
 import {AudioFileResult} from './audioBatch';
+import {fileEpoch, itemEpoch, batchDate} from './mr20FileTime';
 
 const INBOX_KEY = '@ringmemory:mr20:inbox';
 
@@ -48,28 +49,8 @@ export function batchFileName(item: {fname: string}): string {
   return /\.mp3$/i.test(item.fname) ? item.fname : `${item.fname}.mp3`;
 }
 
-function formatEventTime(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  );
-}
-
-/**
- * 后端 `/audio/batch` 必填的录制时刻（显式 event time），格式 `yyyy-MM-dd HH:mm:ss`。
- * 后端已改为按此字段（而非文件名）解析录音时间，故前端必须显式回传。
- * 优先从 MR20 落盘文件名解析（`YYYY-MM-DD HH-MM-SS.mp3`，时间段用 `-` 分隔），
- * 解析不出再退回 createdAt。
- */
-export function batchDate(item: {fname: string; createdAt: number}): string {
-  const base = item.fname.replace(/\.mp3$/i, '').trim();
-  const m = base.match(/^(\d{4}-\d{2}-\d{2})[ _](\d{2})-(\d{2})-(\d{2})$/);
-  if (m) {
-    return `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
-  }
-  return formatEventTime(new Date(item.createdAt));
-}
+// 设备命名 → 录音时刻的纯解析工具在 mr20FileTime（无 RN 依赖，便于单测）；此处透传给现有引用方。
+export {fileEpoch, itemEpoch, batchDate};
 
 async function readInbox(): Promise<Mr20InboxItem[]> {
   const raw = await AsyncStorage.getItem(INBOX_KEY);
@@ -90,7 +71,8 @@ async function writeInbox(items: Mr20InboxItem[]): Promise<void> {
 
 export async function getInbox(): Promise<Mr20InboxItem[]> {
   const items = await readInbox();
-  return items.sort((a, b) => b.createdAt - a.createdAt);
+  // 按录音（设备命名）时间倒序：新录音在前。历史条目命名解析不出时退回 createdAt。
+  return items.sort((a, b) => itemEpoch(b) - itemEpoch(a));
 }
 
 /** 清空收件箱（配合 clearSyncedSet 做「清除本地缓存并重新同步」）。 */
@@ -106,16 +88,31 @@ export async function removeInboxItems(ids: string[]): Promise<Mr20InboxItem[]> 
   const idSet = new Set(ids);
   const next = (await readInbox()).filter(i => !idSet.has(i.id));
   await AsyncStorage.setItem(INBOX_KEY, JSON.stringify(next));
-  return next.sort((a, b) => b.createdAt - a.createdAt);
+  return next.sort((a, b) => itemEpoch(b) - itemEpoch(a));
 }
 
 async function upsertInbox(item: Mr20InboxItem): Promise<void> {
+  await upsertInboxMany([item]);
+}
+
+/**
+ * 批量 upsert：只读一次、写一次整箱。批量同步收尾时用，避免每文件都读+写整个
+ * inbox（原来 N 个文件是 O(N²) 的 AsyncStorage 往返，会卡住进度条）。
+ */
+export async function upsertInboxMany(incoming: Mr20InboxItem[]): Promise<void> {
+  if (!incoming.length) {
+    return;
+  }
   const items = await readInbox();
-  const idx = items.findIndex(i => i.id === item.id);
-  if (idx >= 0) {
-    items[idx] = item;
-  } else {
-    items.push(item);
+  const idxById = new Map(items.map((it, i) => [it.id, i]));
+  for (const item of incoming) {
+    const idx = idxById.get(item.id);
+    if (idx !== undefined) {
+      items[idx] = item;
+    } else {
+      idxById.set(item.id, items.length);
+      items.push(item);
+    }
   }
   await writeInbox(items);
 }
@@ -142,8 +139,10 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
  * 真正的上传 + 批处理由用户手动触发。若该文件此前已 done，保留结果不回退。
  */
 export async function recordSyncedFile(input: IngestInput): Promise<Mr20InboxItem> {
+  const items = await readInbox();
   const id = `${input.dir}/${input.fname}`;
-  const existing = (await readInbox()).find(i => i.id === id);
+  const idx = items.findIndex(i => i.id === id);
+  const existing = idx >= 0 ? items[idx] : undefined;
   if (existing && existing.status === 'done') {
     return existing;
   }
@@ -157,9 +156,16 @@ export async function recordSyncedFile(input: IngestInput): Promise<Mr20InboxIte
     batchGroupId: existing?.batchGroupId,
     transcript: existing?.transcript,
     status: 'synced',
-    createdAt: existing?.createdAt ?? Date.now(),
+    // createdAt 用文件命名时间（录音时刻），使「我的录音」按录音时间排序；
+    // 命名解析不出再退回当前（传输）时刻。历史条目保留原 createdAt。
+    createdAt: existing?.createdAt ?? fileEpoch(input.dir, input.fname) ?? Date.now(),
   };
-  await upsertInbox(item);
+  if (idx >= 0) {
+    items[idx] = item;
+  } else {
+    items.push(item);
+  }
+  await writeInbox(items); // 单次读+写，避免 recordSyncedFile 内再走 upsert 二次读
   return item;
 }
 

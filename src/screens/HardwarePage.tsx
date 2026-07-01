@@ -42,11 +42,13 @@ import {images} from '../design/assets';
 import {useNav} from '../navigation/nav';
 import {useMr20} from '../hooks/useMr20';
 import {useMr20Playback} from '../hooks/useMr20Playback';
-import type {Mr20InboxItem} from '../services/mr20Ingest';
+import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
 import {IosAlert, HW, type HwSubPage} from './hardware/parts';
 import {DeviceSettings} from './hardware/DeviceSettings';
 import {WifiManage} from './hardware/WifiManage';
 import {WifiTransfer} from './hardware/WifiTransfer';
+import {DeviceFiles} from './hardware/DeviceFiles';
+import {TransferBadge} from './hardware/TransferBadge';
 import {TimeSync} from './hardware/TimeSync';
 import {RecordMode} from './hardware/RecordMode';
 import {OtaUpdate} from './hardware/OtaUpdate';
@@ -262,7 +264,7 @@ export function HardwarePage() {
   const groups = useMemo(() => {
     const map = new Map<string, Mr20InboxItem[]>();
     for (const it of inbox) {
-      const label = dayLabel(it.createdAt);
+      const label = dayLabel(itemEpoch(it));
       const arr = map.get(label) ?? [];
       arr.push(it);
       map.set(label, arr);
@@ -288,6 +290,9 @@ export function HardwarePage() {
   }
   if (subPage === 'wifiTransfer') {
     return <WifiTransfer onBack={() => setSubPage('main')} />;
+  }
+  if (subPage === 'deviceFiles') {
+    return <DeviceFiles onBack={() => setSubPage('main')} />;
   }
   if (subPage === 'time') {
     return <TimeSync onBack={() => setSubPage('settings')} />;
@@ -450,21 +455,19 @@ export function HardwarePage() {
             <Text style={st.listTitle}>我的录音</Text>
             <TouchableOpacity
               style={[st.downloadAll, syncing && st.downloadAllSyncing]}
-              onPress={() => (syncing ? stopSync() : syncNow())}>
+              onPress={() => (syncing ? stopSync() : setSubPage('deviceFiles'))}>
               <Text style={[st.downloadAllText, syncing && st.downloadAllSyncingText]}>
                 {syncing
                   ? syncProgress && syncProgress.total > 0
                     ? `暂停同步 ${syncProgress.completed}/${syncProgress.total}`
                     : '暂停同步'
-                  : deviceFiles && deviceFiles.pending > 0
-                  ? `全部下载 (${deviceFiles.pending})`
-                  : '全部下载'}
+                  : '查看全部'}
               </Text>
             </TouchableOpacity>
           </View>
 
           {inbox.length === 0 ? (
-            <Text style={st.empty}>暂无录音。点「全部下载」从记忆粒同步。</Text>
+            <Text style={st.empty}>暂无录音。点「查看全部」从记忆粒同步。</Text>
           ) : (
             groups.map(([label, items]) => (
               <View key={label} style={{marginBottom: 8}}>
@@ -488,7 +491,7 @@ export function HardwarePage() {
                         </TouchableOpacity>
                         <View style={{flex: 1}}>
                           <Text style={st.recTitle} numberOfLines={1}>
-                            {item.transcript?.trim() || `录音 ${clock(item.createdAt)}`}
+                            {item.transcript?.trim() || `录音 ${clock(itemEpoch(item))}`}
                           </Text>
                           <Text style={st.recMeta}>时长 {fmtHuman(item.seconds)}</Text>
                         </View>
@@ -645,6 +648,9 @@ export function HardwarePage() {
           },
         ]}
       />
+
+      {/* 非阻塞传输浮标：从设备文件页发起同步后返回主页仍能看到进度、继续操作 */}
+      <TransferBadge />
     </View>
   );
 }

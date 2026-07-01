@@ -22,6 +22,7 @@ export type HwSubPage =
   | 'settings'
   | 'wifi'
   | 'wifiTransfer'
+  | 'deviceFiles'
   | 'time'
   | 'recordMode'
   | 'ota'

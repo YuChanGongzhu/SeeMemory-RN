@@ -54,6 +54,7 @@ import {
   listPendingFiles,
   scanDeviceFiles,
   syncAllFiles,
+  syncFiles,
   Mr20DeviceFiles,
   SyncProgress,
 } from '../services/mr20Sync';
@@ -130,6 +131,8 @@ interface Mr20ContextType {
   clearPairing: (deviceId: string, name: string) => Promise<void>;
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
+  // 同步勾选的设备文件子集到「我的录音」（设备文件浏览页用）。
+  syncSelected: (files: Mr20File[]) => Promise<void>;
   stopSync: () => void;
   // 列出设备上「尚未同步」的录音文件（供 WiFi 快传页勾选）。
   listPendingDeviceFiles: () => Promise<Mr20File[]>;
@@ -190,6 +193,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   clearPairing: noop,
   disconnect: noop,
   syncNow: noop,
+  syncSelected: noop,
   stopSync: () => {},
   listPendingDeviceFiles: async () => [],
   openHotspot: noop,
@@ -416,30 +420,46 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
   }, [connState, syncing]);
 
-  const syncNow = useCallback(async () => {
-    const client = clientRef.current;
-    if (!client) {
-      return;
-    }
-    setError(null);
-    syncCancelRef.current = false;
-    setSyncing(true);
-    setSyncProgress({total: 0, completed: 0});
-    try {
-      // 只下载到手机并登记为「已同步·待处理」；上传 COS / 批处理由用户手动触发。
-      await syncAllFiles(client, {
-        onProgress: p => setSyncProgress(p),
-        shouldCancel: () => syncCancelRef.current,
-      });
-      await refreshInbox();
-      // 重新统计设备文件，刷新「待同步」数（同步完应归零/减少）。
-      setDeviceFiles(await scanDeviceFiles(client).catch(() => null));
-    } catch (e) {
-      setError(String((e as Error)?.message || e));
-    } finally {
-      setSyncing(false);
-    }
-  }, [refreshInbox]);
+  // 同步执行体：files 为空 = 全部待同步（syncAllFiles）；否则 = 勾选的子集（syncFiles）。
+  const runSync = useCallback(
+    async (files?: Mr20File[]) => {
+      const client = clientRef.current;
+      if (!client) {
+        return;
+      }
+      setError(null);
+      syncCancelRef.current = false;
+      setSyncing(true);
+      setSyncProgress({total: files?.length ?? 0, completed: 0});
+      try {
+        // 只下载到手机并登记为「已同步·待处理」；上传 COS / 批处理由用户手动触发。
+        const opts = {
+          onProgress: (p: SyncProgress) => setSyncProgress(p),
+          shouldCancel: () => syncCancelRef.current,
+        };
+        const results = files
+          ? await syncFiles(client, files, opts)
+          : await syncAllFiles(client, opts);
+        const ok = results.filter(r => !r.error).length;
+        // 立即收尾，不做昂贵的 BLE 全盘重扫：刷新收件箱 + 「待同步」数按成功数本地递减。
+        refreshInbox().catch(() => undefined);
+        setDeviceFiles(prev =>
+          prev ? {...prev, pending: Math.max(0, prev.pending - ok)} : prev,
+        );
+      } catch (e) {
+        setError(String((e as Error)?.message || e));
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [refreshInbox],
+  );
+
+  const syncNow = useCallback(() => runSync(), [runSync]);
+  const syncSelected = useCallback(
+    (files: Mr20File[]) => runSync(files),
+    [runSync],
+  );
 
   // 中断同步：置中断标志 + 打断正在传输的当前文件（SHUT），即时停下整批。
   // 已下好的录音保留在收件箱可直接试听；未传的下次同步自动补齐。
@@ -488,9 +508,6 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         shouldCancel: () => wifiCancelRef.current,
       });
       const ok = results.filter(r => !r.error);
-      await refreshInbox();
-      // 刷新「待同步」数（快传完应减少）。
-      setDeviceFiles(await scanDeviceFiles(client).catch(() => null));
       // 全部失败（且非用户主动取消）：多半是热点已关/未连上，报错让其重来，别误显示「成功」。
       if (ok.length === 0 && results.length > 0 && !wifiCancelRef.current) {
         setError('热点已关闭或未连接，请重新点开始快传（连热点后请尽快回到 App）。');
@@ -502,7 +519,16 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         bytes: ok.reduce((n, r) => n + (r.file.size || 0), 0),
         failed: results.length - ok.length,
       });
+      // 立即弹「快传成功」——不要等下面的 BLE 收尾。之前在这里 await scanDeviceFiles
+      // （listDirs + 每个日期文件夹 listFiles，串行 BLE、每次超时 8s）会让进度到 100%
+      // 后弹窗仍停在「正在快传」很久，是「图2 卡住/图2 后半天不出图3」的主因。
       setWifiPhase('done');
+      // 收尾（不阻塞成功弹窗）：刷新收件箱；「待同步」数按已成功数本地递减，
+      // 跳过昂贵的 BLE 全盘重扫（下次进设备主页会自然重新统计）。
+      refreshInbox().catch(() => undefined);
+      setDeviceFiles(prev =>
+        prev ? {...prev, pending: Math.max(0, prev.pending - ok.length)} : prev,
+      );
     },
     [refreshInbox],
   );
@@ -868,6 +894,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     clearPairing,
     disconnect,
     syncNow,
+    syncSelected,
     stopSync,
     listPendingDeviceFiles,
     openHotspot,

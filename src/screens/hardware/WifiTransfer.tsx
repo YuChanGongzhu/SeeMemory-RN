@@ -8,29 +8,18 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   ActivityIndicator,
-  Linking,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import {
-  AlertCircle,
-  Check,
-  CheckCircle2,
-  Circle,
-  Rocket,
-  Settings,
-  Wifi,
-} from 'lucide-react-native';
-import {BottomSheet} from '../../ui/BottomSheet';
-import {ProgressBar} from '../../ui/kit';
+import {Check, Rocket, Wifi} from 'lucide-react-native';
 import {Mr20DebugLog} from '../../components/mr20/Mr20DebugLog';
 import {useMr20} from '../../hooks/useMr20';
 import type {Mr20File} from '../../native/mr20/Mr20Client';
-import type {WifiConnectStep, WifiStepState} from '../../services/mr20WifiSync';
 import {SubHeader, Card, HW} from './parts';
+import {TransferBadge} from './TransferBadge';
 
 function fmtHuman(total: number): string {
   const s = Math.max(0, Math.round(total));
@@ -47,41 +36,8 @@ function fmtMB(bytes: number): string {
 const keyOf = (f: Mr20File) => `${f.dir}/${f.fname}`;
 const stripMp3 = (n: string) => n.replace(/\.mp3$/i, '');
 
-const STEP_META: {key: WifiConnectStep; label: (ssid?: string) => string}[] = [
-  {key: 'open', label: () => '开启设备 WiFi 热点'},
-  {key: 'join', label: ssid => `连接到设备热点${ssid ? `（${ssid}）` : ''}`},
-  {key: 'reachable', label: () => '校验高速通道 192.168.200.1:8475'},
-];
-
-function StepIcon({state}: {state: WifiStepState}) {
-  if (state === 'done') {
-    return <CheckCircle2 size={20} color={HW.green} />;
-  }
-  if (state === 'failed') {
-    return <AlertCircle size={20} color={HW.red} />;
-  }
-  if (state === 'active') {
-    return <ActivityIndicator size="small" color={HW.blue} />;
-  }
-  return <Circle size={20} color={HW.textTertiary} />;
-}
-
 export function WifiTransfer({onBack}: {onBack: () => void}) {
-  const {
-    connState,
-    listPendingDeviceFiles,
-    startWifiTransfer,
-    continueWifiAfterManualJoin,
-    cancelWifiTransfer,
-    resetWifiTransfer,
-    wifiPhase,
-    wifiSteps,
-    wifiProgress,
-    wifiCred,
-    wifiSummary,
-    error,
-    logs,
-  } = useMr20();
+  const {connState, listPendingDeviceFiles, startWifiTransfer, logs} = useMr20();
 
   const [files, setFiles] = useState<Mr20File[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,8 +60,8 @@ export function WifiTransfer({onBack}: {onBack: () => void}) {
     };
   }, [listPendingDeviceFiles]);
 
-  // 离开页面释放热点。
-  useEffect(() => () => resetWifiTransfer(), [resetWifiTransfer]);
+  // 传输改为非阻塞浮标后，**不**在卸载时 reset（否则返回主页会误取消进行中的快传）；
+  // 热点/状态收尾交给浮标的「取消/知道了」。
 
   const groups = useMemo(() => {
     const map = new Map<string, Mr20File[]>();
@@ -148,18 +104,6 @@ export function WifiTransfer({onBack}: {onBack: () => void}) {
       startWifiTransfer(selectedFiles).catch(() => undefined);
     }
   }, [selectedFiles, startWifiTransfer]);
-
-  const finishAndBack = useCallback(() => {
-    resetWifiTransfer();
-    onBack();
-  }, [resetWifiTransfer, onBack]);
-
-  const cancel = useCallback(() => {
-    cancelWifiTransfer();
-  }, [cancelWifiTransfer]);
-
-  const connecting = wifiPhase === 'connecting' || wifiPhase === 'manual';
-  const overlay = wifiPhase === 'transferring' || wifiPhase === 'done' || wifiPhase === 'error';
 
   return (
     <View style={st.root}>
@@ -241,112 +185,8 @@ export function WifiTransfer({onBack}: {onBack: () => void}) {
         </View>
       ) : null}
 
-      {/* 连接中 / 引导手动连接 清单 */}
-      <BottomSheet visible={connecting} onClose={cancel} title="连接中">
-        <View style={st.steps}>
-          {STEP_META.map(s => (
-            <View key={s.key} style={st.stepRow}>
-              <StepIcon state={wifiSteps[s.key]} />
-              <Text style={st.stepLabel}>{s.label(wifiCred?.ssid)}</Text>
-            </View>
-          ))}
-        </View>
-
-        {wifiPhase === 'manual' ? (
-          <View style={st.manualBox}>
-            <Text style={st.manualText}>
-              自动连接未成功。请到系统「设置 → 无线局域网」连接热点
-              {wifiCred?.ssid ? ` ${wifiCred.ssid}` : ''}
-              {wifiCred?.pwd ? `（密码 ${wifiCred.pwd}）` : ''}
-              ，请在 30 秒内连上并尽快回到 App 点下方继续（超时设备热点会自动关闭）。
-            </Text>
-            <TouchableOpacity style={st.manualBtn} onPress={() => Linking.openSettings()}>
-              <Settings size={16} color={HW.blue} />
-              <Text style={st.manualBtnText}>去系统设置连接</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={st.primaryBtn}
-              onPress={() => continueWifiAfterManualJoin().catch(() => undefined)}>
-              <Text style={st.primaryBtnText}>我已连接，继续</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <Text style={st.connectingHint}>请保持设备靠近手机，按提示在弹窗中点「加入」。</Text>
-        )}
-
-        <TouchableOpacity style={st.cancelLink} onPress={cancel}>
-          <Text style={st.cancelLinkText}>取消</Text>
-        </TouchableOpacity>
-      </BottomSheet>
-
-      {/* 传输中 / 完成 / 失败 覆盖层 */}
-      {overlay ? (
-        <View style={st.overlay}>
-          {wifiPhase === 'transferring' ? (
-            <View style={st.overlayCard}>
-              <Text style={st.overlayTitle}>正在快传…</Text>
-              <Text style={st.overlayCount}>
-                {wifiProgress ? `${wifiProgress.completed} / ${wifiProgress.total}` : ''}
-              </Text>
-              {wifiProgress?.current ? (
-                <>
-                  <Text style={st.overlayFile} numberOfLines={1}>
-                    {stripMp3(wifiProgress.current.fname)}
-                  </Text>
-                  <View style={{width: '100%', marginTop: 12}}>
-                    <ProgressBar
-                      value={wifiProgress.current.received}
-                      total={wifiProgress.current.size}
-                      color={HW.blue}
-                      height={8}
-                    />
-                  </View>
-                  <Text style={st.overlayBytes}>
-                    {fmtMB(wifiProgress.current.received)} / {fmtMB(wifiProgress.current.size)}
-                  </Text>
-                </>
-              ) : (
-                <ActivityIndicator color={HW.blue} style={{marginTop: 16}} />
-              )}
-              <TouchableOpacity style={st.cancelBtn} onPress={cancel}>
-                <Text style={st.cancelBtnText}>取消快传</Text>
-              </TouchableOpacity>
-            </View>
-          ) : wifiPhase === 'done' ? (
-            <View style={st.overlayCard}>
-              <View style={st.successOrb}>
-                <Check size={36} color="#fff" strokeWidth={3} />
-              </View>
-              <Text style={st.overlayTitle}>快传成功</Text>
-              <Text style={st.overlaySub}>
-                {wifiSummary
-                  ? `${wifiSummary.count} 个文件 · ${fmtMB(wifiSummary.bytes)}`
-                  : ''}
-                {wifiSummary && wifiSummary.failed > 0 ? `（${wifiSummary.failed} 个失败）` : ''}
-              </Text>
-              <Text style={st.overlayNote}>已自动入库，可在录音列表继续上传转写。</Text>
-              <TouchableOpacity style={st.primaryBtn} onPress={finishAndBack}>
-                <Text style={st.primaryBtnText}>完成</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={st.overlayCard}>
-              <View style={st.errorOrb}>
-                <AlertCircle size={36} color="#fff" />
-              </View>
-              <Text style={st.overlayTitle}>快传中断</Text>
-              <Text style={st.overlaySub}>{error || '已传完的录音已保留，可重试剩余文件。'}</Text>
-              <TouchableOpacity style={st.primaryBtn} onPress={start}>
-                <Text style={st.primaryBtnText}>重试</Text>
-              </TouchableOpacity>
-              {/* 关闭弹窗但留在本页，便于展开下方「协议调试日志」查看往返 */}
-              <TouchableOpacity style={st.cancelBtn} onPress={resetWifiTransfer}>
-                <Text style={st.cancelBtnText}>返回</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      ) : null}
+      {/* 非阻塞传输浮标（连接/进度/完成/失败），与设备文件页共用 */}
+      <TransferBadge />
     </View>
   );
 }
@@ -373,31 +213,4 @@ const st = StyleSheet.create({
   startBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 16, backgroundColor: HW.blue},
   startBtnDisabled: {backgroundColor: HW.textTertiary},
   startBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
-
-  steps: {gap: 18, paddingVertical: 8},
-  stepRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  stepLabel: {flex: 1, fontSize: 15, color: HW.textMain},
-  connectingHint: {fontSize: 13, color: HW.textSub, marginTop: 16, lineHeight: 19},
-  manualBox: {marginTop: 16, gap: 10},
-  manualText: {fontSize: 13, color: HW.textBody, lineHeight: 20},
-  manualBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, backgroundColor: HW.fill},
-  manualBtnText: {fontSize: 15, color: HW.blue, fontWeight: '600'},
-
-  primaryBtn: {height: 50, borderRadius: 14, backgroundColor: HW.blue, alignItems: 'center', justifyContent: 'center', marginTop: 8, paddingHorizontal: 32},
-  primaryBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
-  cancelLink: {alignItems: 'center', paddingVertical: 14, marginTop: 4},
-  cancelLinkText: {fontSize: 15, color: HW.textSub},
-
-  overlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 28},
-  overlayCard: {width: '100%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 24, padding: 28, alignItems: 'center'},
-  overlayTitle: {fontSize: 18, fontWeight: '700', color: HW.textMain, marginBottom: 6},
-  overlayCount: {fontSize: 14, color: HW.textSub, marginBottom: 8},
-  overlayFile: {fontSize: 14, color: HW.textMain, fontWeight: '500'},
-  overlayBytes: {fontSize: 12, color: HW.textSub, marginTop: 8},
-  overlaySub: {fontSize: 14, color: HW.textBody, textAlign: 'center', lineHeight: 20},
-  overlayNote: {fontSize: 12, color: HW.textSub, textAlign: 'center', marginTop: 8, lineHeight: 18},
-  successOrb: {width: 72, height: 72, borderRadius: 36, backgroundColor: HW.green, alignItems: 'center', justifyContent: 'center', marginBottom: 16},
-  errorOrb: {width: 72, height: 72, borderRadius: 36, backgroundColor: HW.red, alignItems: 'center', justifyContent: 'center', marginBottom: 16},
-  cancelBtn: {marginTop: 16, paddingHorizontal: 28, paddingVertical: 10},
-  cancelBtnText: {fontSize: 15, color: HW.textSub, fontWeight: '600'},
 });

@@ -137,20 +137,32 @@ export async function syncAllFiles(
   client: Mr20Client,
   options: SyncOptions = {},
 ): Promise<SyncFileResult[]> {
-  const {onProgress, deleteAfter = false, shouldCancel} = options;
   const pending = await listPendingFiles(client);
+  return syncFiles(client, pending, options);
+}
+
+/**
+ * 同步「指定」的文件子集（设备文件浏览页勾选后调用）。串行 BLE 拉取；
+ * 单个文件失败只记录错误、继续下一个。与 syncAllFiles 共用同一落盘/入库管线。
+ */
+export async function syncFiles(
+  client: Mr20Client,
+  files: Mr20File[],
+  options: SyncOptions = {},
+): Promise<SyncFileResult[]> {
+  const {onProgress, deleteAfter = false, shouldCancel} = options;
   const results: SyncFileResult[] = [];
   let completed = 0;
-  onProgress?.({total: pending.length, completed});
+  onProgress?.({total: files.length, completed});
 
-  for (const file of pending) {
+  for (const file of files) {
     if (shouldCancel?.()) {
       break; // 用户中断：已下好的保留在收件箱，未传的留待下次同步补齐。
     }
     try {
       const bytes = await client.pullFile(file.dir, file.fname, (received, size) => {
         onProgress?.({
-          total: pending.length,
+          total: files.length,
           completed,
           current: {
             dir: file.dir,
@@ -183,7 +195,7 @@ export async function syncAllFiles(
       });
     } finally {
       completed += 1;
-      onProgress?.({total: pending.length, completed});
+      onProgress?.({total: files.length, completed});
     }
   }
 
