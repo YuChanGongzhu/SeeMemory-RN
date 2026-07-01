@@ -34,6 +34,31 @@ export interface Spec extends TurboModule {
 
   // 删除 Documents 下某相对路径（文件或目录），不存在视为成功
   deleteRelativePath(relativePath: string): Promise<void>;
+
+  // ============ WiFi 快传 ============
+  // 程序化加入设备热点（iOS NEHotspotConfiguration / Android WifiNetworkSpecifier）。
+  // 系统会弹一次确认框。成功 resolve true；被拒/超时 resolve false（上层降级到引导手动连接）。
+  wifiJoin(ssid: string, pwd: string, timeoutMs: number): Promise<boolean>;
+
+  // 退出/移除设备热点配置（iOS removeConfiguration / Android 释放 requestNetwork 回调）。
+  wifiLeave(): Promise<void>;
+
+  // 先建立到 host:port 的 TCP 连接（socket ready 即 resolve；失败/超时 reject）。
+  // 必须在下发 BLE `W` 指令**之前**连好——设备一回 W&LEN 就立刻往 socket 推字节，
+  // 晚连会丢数据卡 0（见 data/测试报告.md）。连接句柄按 transferId 暂存，供下面收流。
+  wifiConnect(host: string, port: number, transferId: string): Promise<void>;
+
+  // 在 wifiConnect 已建好的 socket 上收流，落盘到 Documents 下 relativePath，返回绝对路径。
+  // 按 expectedLen 剥尾 5 字节结束标记 (BA 5A 02 8F 04)：落盘大小 = expectedLen。
+  // 过程通过 onWifiProgress 事件回传 {transferId, received, total}。
+  wifiReceiveFile(
+    relativePath: string,
+    expectedLen: number,
+    transferId: string,
+  ): Promise<string>;
+
+  // 中断指定 transferId 的 WiFi 连接/接收（关 socket）。不存在视为成功。
+  wifiAbort(transferId: string): Promise<void>;
 }
 
 export default TurboModuleRegistry.get<Spec>('RTNMr20Module');

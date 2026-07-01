@@ -91,6 +91,7 @@ export class Mr20Client {
   // 8 秒后对着空 promise reject 出「未处理拒绝」。
   private pendingCancels: Set<(err: Error) => void> = new Set();
   private fileXfer: FileTransfer | null = null;
+  private wifiTransferId: string | null = null;
   private listeners: {[K in keyof EventMap]?: Set<Listener<K>>} = {};
   private connState: Mr20ConnState = 'idle';
   private device: Mr20Device | null = null;
@@ -734,6 +735,161 @@ export class Mr20Client {
       this.failFileTransfer(new Error('已中断'));
     }
     await this.write(Cmd.shutTransfer()).catch(() => undefined);
+  }
+
+  // -------------------------------------------------------------------------
+  // WiFi 快传（控制走 BLE，文件字节走 WiFi TCP）
+  // -------------------------------------------------------------------------
+
+  /** 查询 WiFi 状态码（0关 1连 2未连但AP起 3待开 4配密码 5OTA 6待复位 7无连自动关）。 */
+  async getWifiState(): Promise<number> {
+    const m = await this.sendAndWait(
+      Cmd.getWifiState(),
+      x => x.type === 'WIFI_STATE',
+    );
+    return m.type === 'WIFI_STATE' ? parseInt(m.state, 10) || 0 : 0;
+  }
+
+  /** 获取热点 SSID/密码。 */
+  async getWifiCredentials(): Promise<{ssid: string; pwd: string}> {
+    const m = await this.sendAndWait(Cmd.getWifi(), x => x.type === 'WIFI_CRED');
+    return m.type === 'WIFI_CRED'
+      ? {ssid: m.ssid, pwd: m.pwd}
+      : {ssid: '', pwd: ''};
+  }
+
+  /**
+   * 开热点并等到 AP 就绪。**只发 WIFIO + 轮询 WIFIS，绝不发 SK**。
+   *
+   * 注意：协议说「设备收到密钥后才自动配 WiFi 密码」，但本 App 走裸连探测(不发 SK)，且部分设备
+   * 出厂预绑厂商密钥、对我们的密钥永远 SK&ERR（见 [[mr20-sk-binding-key]]）——**在此发 SK 会打断
+   * 会话、把连接搞断**。所以这里坚决不发 SK；WiFi 能否开由设备侧决定，开不起来就如实报「末态 X」。
+   *
+   * 状态机轮询 WIFIS：
+   *   - 1(已连)/2(AP起未连)：就绪，返回
+   *   - 0(关)/7(自动关)/-1(无应答)：发 WIFIO（节流 ≥3.5s）
+   *   - 3(等待开启)/4/5/6(配密码/OTA/待复位)：继续等
+   */
+  async openWifi(opts: {maxWaitMs?: number} = {}): Promise<void> {
+    const {maxWaitMs = 30000} = opts;
+    const usable = (s: number) => s === 1 || s === 2;
+    const deadline = Date.now() + maxWaitMs;
+    let lastOpenAt = 0;
+    let lastState = -1;
+    while (Date.now() < deadline) {
+      const s = await this.getWifiState().catch(() => -1);
+      lastState = s;
+      if (usable(s)) {
+        return;
+      }
+      // 只在明确「关闭态」(0/7) 才补发 WIFIO，且节流 ≥6s——正常 WIFIO 4s 到 2。
+      // 反复开关会触发 WiFi 模组卡死(状态3)，故尽量少发；状态 3/-1 期间纯等待不重发。
+      if ((s === 0 || s === 7) && Date.now() - lastOpenAt > 6000) {
+        lastOpenAt = Date.now();
+        await this.sendAndWait(
+          Cmd.wifiOpen(),
+          x => x.type === 'WIFI_OPENED',
+          3000,
+        ).catch(() => undefined); // 个别固件不回 WIFIO，靠轮询兜底
+      }
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
+    }
+    // 卡在状态 3 = 已知固件 bug（反复开关后 WiFi 模组卡「等待开启」进不到 2），需断电重启。
+    if (lastState === 3) {
+      throw new Error(
+        '设备 WiFi 模组卡住（已知固件问题，反复开关触发）——请将录音设备断电重启后再试。',
+      );
+    }
+    // 其它末态便于定位：-1=WIFIS 无应答；4/6=卡配密码周期；0=发了 WIFIO 仍未开。
+    throw new Error(`设备 WiFi 热点未就绪（末态 ${lastState}）`);
+  }
+
+  /** 关热点：发 WIFIC（设备 30s 无连接也会自动关，故失败可容忍）。 */
+  async closeWifi(): Promise<void> {
+    await this.sendAndWait(
+      Cmd.wifiClose(),
+      x => x.type === 'WIFI_CLOSED',
+      4000,
+    ).catch(() => undefined);
+  }
+
+  /**
+   * WiFi 拉取单个文件：BLE 发 W 命令拿 W&LEN，再由原生 TCP 接收器收流落盘。
+   * **不设置 this.fileXfer**——文件字节走 WiFi TCP，不经过 BLE notify，避免
+   * handleFrame 误把无关 notify 当文件数据。
+   */
+  async pullFileWifi(
+    dir: string,
+    fname: string,
+    opts: {
+      host: string;
+      port: number;
+      relativePath: string;
+      resumeBytes?: number;
+      onProgress?: (received: number, total: number) => void;
+    },
+  ): Promise<{path: string; total: number}> {
+    const {host, port, relativePath, resumeBytes = 0, onProgress} = opts;
+    const transferId = `${dir}/${fname}/${Date.now()}`;
+    this.wifiTransferId = transferId;
+    let total = 0;
+
+    // 1) **先连 TCP socket**（必须早于发 W——设备一回 W&LEN 就往 socket 推字节，晚连丢数据卡 0）。
+    this.log(`[wifi] 连接 ${host}:${port} …`);
+    try {
+      await Mr20Native.wifiConnect(host, port, transferId);
+    } catch (e) {
+      this.wifiTransferId = null;
+      throw new Error(`连接设备热点失败：${String((e as Error)?.message || e)}`);
+    }
+    this.log('[wifi] socket 已连接');
+
+    // 2) 订阅原生进度事件（仅本次 transferId）。
+    const sub = mr20Emitter.addListener('onWifiProgress', (d: any) => {
+      if (String(d?.transferId) !== transferId) {
+        return;
+      }
+      const received = Number(d?.received) || 0;
+      const t = Number(d?.total) || total;
+      onProgress?.(received, t);
+      this.emit('fileProgress', {received, total: t});
+    });
+
+    try {
+      // 3) BLE 下发 W 指令拿文件长度（W&LEN）。
+      const lenMsg = await this.sendAndWait(
+        resumeBytes > 0
+          ? Cmd.wifiFileResume(dir, fname, resumeBytes)
+          : Cmd.wifiFile(dir, fname),
+        x => x.type === 'FILE_DATA_LEN' || x.type === 'FILE_DATA_ERR',
+        8000,
+      );
+      if (lenMsg.type === 'FILE_DATA_ERR') {
+        throw new Error('设备无法打开文件');
+      }
+      total = lenMsg.type === 'FILE_DATA_LEN' ? lenMsg.length : 0;
+      this.log(`[wifi] W&LEN=${total}，开始收流`);
+
+      // 4) 在已连接的 socket 上收流落盘（含剥离 5 字节尾标），返回绝对路径。
+      const path = await Mr20Native.wifiReceiveFile(relativePath, total, transferId);
+      this.log('[wifi] 收流完成');
+      return {path, total};
+    } catch (e) {
+      // 失败时关掉悬空 socket（成功路径原生已自行 cancel）。
+      await Mr20Native.wifiAbort(transferId).catch(() => undefined);
+      throw e;
+    } finally {
+      this.wifiTransferId = null;
+      sub.remove();
+    }
+  }
+
+  /** 中断正在进行的 WiFi 接收（关 socket），使当前文件 pullFileWifi 立即出错。 */
+  async abortWifi(): Promise<void> {
+    const id = this.wifiTransferId;
+    if (id) {
+      await Mr20Native.wifiAbort(id).catch(() => undefined);
+    }
   }
 
   // -------------------------------------------------------------------------

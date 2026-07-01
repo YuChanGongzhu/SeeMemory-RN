@@ -1,92 +1,100 @@
 import React, {useEffect, useState} from 'react';
-import {View, Text, TextInput, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
+import {View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {ChevronLeft, Plus, Bell, Clock, PenLine, Trash2, X} from 'lucide-react-native';
+import {ChevronLeft, Plus, Bell, Clock, PenLine, Trash2} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
-import {BottomSheet} from '../ui/BottomSheet';
 import {useWriteGate} from '../hooks/useWriteGate';
 import {useNav} from '../navigation/nav';
-import {useAuth} from '../auth/AuthContext';
-import {listReminders, createReminder, deleteReminder, updateReminder, type ScheduleJob} from '../apis/requests/reminders';
+import {listReminders, deleteReminder, updateReminder, type ScheduleJob} from '../apis/requests/reminders';
+import {TaskDialog} from './TaskDialog';
 import type {Todo} from '../types/memory';
 
 const FILTERS = ['全部', '一次性', '周期性'] as const;
+
+/** once 显示执行时间(MM/DD HH:mm)，recurring 显示 cron。 */
+function formatWhen(j: ScheduleJob): string {
+  if (j.kind === 'once') {
+    if (!j.fire_at) return '-';
+    const d = new Date(j.fire_at);
+    if (isNaN(d.getTime())) return j.fire_at;
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  return j.cron || '-';
+}
 
 function toTodo(j: ScheduleJob): Todo {
   return {
     id: j.id,
     title: j.name,
-    description: j.description || '',
-    type: j.taskType === 'cron' ? '周期性' : '一次性',
-    time: j.schedule,
+    description: j.prompt || '',
+    type: j.kind === 'recurring' ? '周期性' : '一次性',
+    time: formatWhen(j),
     source: 'App',
     enabled: j.enabled !== false,
   };
 }
 
-/** 待办提醒 — Prototype TodoTab (App.jsx:2282). Wired to device /cron via reminders.ts. */
+/** 待办提醒 — Prototype TodoTab (App.jsx:2282). Wired to manager-api /app/cron via reminders.ts。 */
 export function TodoPage() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const gate = useWriteGate();
-  const {selectedDevice} = useAuth();
   const [filter, setFilter] = useState<string>('全部');
-  const [todos, setTodos] = useState<Todo[]>([]);
+  const [jobs, setJobs] = useState<ScheduleJob[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [draftTitle, setDraftTitle] = useState('');
-  const [draftDesc, setDraftDesc] = useState('');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
+  const [editing, setEditing] = useState<ScheduleJob | null>(null);
 
   const reload = () => {
     setLoading(true);
     listReminders()
-      .then(res => setTodos((res.jobs || []).map(toTodo)))
-      .catch(() => setTodos([]))
+      .then(res => setJobs(res.items || []))
+      .catch(() => setJobs([]))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    if (!selectedDevice) {
-      setTodos([]);
-      setLoading(false);
-      return;
-    }
+    // /app/cron 按登录用户维度，后端解析当前设备，无需选中盒子。
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDevice?.subDomain]);
+  }, []);
 
+  const todos = jobs.map(toTodo);
   const list = todos.filter(t => filter === '全部' || t.type === filter);
 
+  const openCreate = () => {
+    setDialogMode('create');
+    setEditing(null);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (id: Todo['id']) => {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+    setDialogMode('edit');
+    setEditing(job);
+    setDialogOpen(true);
+  };
+
   const toggle = async (t: Todo) => {
-    setTodos(ts => ts.map(x => (x.id === t.id ? {...x, enabled: !x.enabled} : x)));
+    const next = !t.enabled;
+    setJobs(js => js.map(j => (j.id === t.id ? {...j, enabled: next} : j)));
     try {
-      await updateReminder(String(t.id), {name: t.title, description: t.description, taskType: t.type === '周期性' ? 'cron' : 'once', schedule: t.time, enabled: !t.enabled});
+      await updateReminder(String(t.id), {enabled: next});
     } catch {
       reload();
     }
   };
 
   const remove = async (id: Todo['id']) => {
-    setTodos(ts => ts.filter(t => t.id !== id));
+    setJobs(js => js.filter(j => j.id !== id));
     try {
       await deleteReminder(String(id));
     } catch {
       reload();
     }
-  };
-
-  const create = async () => {
-    if (!draftTitle.trim()) return;
-    setCreating(false);
-    try {
-      await createReminder({name: draftTitle.trim(), description: draftDesc.trim(), taskType: 'once', schedule: '明天 09:00'});
-      reload();
-    } catch {
-      // keep silent; reload to reflect server truth
-      reload();
-    }
-    setDraftTitle('');
-    setDraftDesc('');
   };
 
   return (
@@ -96,7 +104,7 @@ export function TodoPage() {
           <ChevronLeft size={24} color={colors.textMain} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>待办提醒</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => gate(() => setCreating(true))}>
+        <TouchableOpacity style={styles.addBtn} onPress={() => gate(openCreate)}>
           <Plus size={20} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -113,9 +121,7 @@ export function TodoPage() {
         <ActivityIndicator color={colors.primary} style={{marginTop: 40}} />
       ) : (
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          {list.length === 0 ? (
-            <Text style={styles.empty}>{selectedDevice ? '暂无待办，点右上角 + 新建' : '请先绑定设备后查看待办'}</Text>
-          ) : null}
+          {list.length === 0 ? <Text style={styles.empty}>暂无待办，点右上角 + 新建</Text> : null}
           {list.map(todo => (
             <View key={todo.id} style={styles.card}>
               <View style={styles.cardTop}>
@@ -132,7 +138,7 @@ export function TodoPage() {
                     </View>
                   </View>
                 </View>
-                <TouchableOpacity onPress={() => toggle(todo)} style={[styles.switch, {backgroundColor: todo.enabled ? colors.primary : colors.border}]}>
+                <TouchableOpacity onPress={() => gate(() => toggle(todo))} style={[styles.switch, {backgroundColor: todo.enabled ? colors.primary : colors.border}]}>
                   <View style={[styles.knob, {left: todo.enabled ? 22 : 2}]} />
                 </TouchableOpacity>
               </View>
@@ -142,8 +148,8 @@ export function TodoPage() {
               <View style={styles.cardFooter}>
                 <Text style={styles.status}>{todo.enabled ? '已启用' : '已停用'}</Text>
                 <View style={{flexDirection: 'row', gap: 16}}>
-                  <TouchableOpacity><PenLine size={16} color={colors.textSub} /></TouchableOpacity>
-                  <TouchableOpacity onPress={() => remove(todo.id)}><Trash2 size={16} color={colors.textSub} /></TouchableOpacity>
+                  <TouchableOpacity onPress={() => gate(() => openEdit(todo.id))}><PenLine size={16} color={colors.textSub} /></TouchableOpacity>
+                  <TouchableOpacity onPress={() => gate(() => remove(todo.id))}><Trash2 size={16} color={colors.textSub} /></TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -152,24 +158,13 @@ export function TodoPage() {
         </ScrollView>
       )}
 
-      <BottomSheet visible={creating} onClose={() => setCreating(false)}>
-        <View style={styles.sheetHead}>
-          <View>
-            <Text style={styles.sheetTitle}>新建任务</Text>
-            <Text style={styles.sheetSub}>填写名称、类型和提醒时间。</Text>
-          </View>
-          <TouchableOpacity style={styles.sheetClose} onPress={() => setCreating(false)}>
-            <X size={16} strokeWidth={2.4} color={colors.textMain} />
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.fieldLabel}>任务名称 *</Text>
-        <TextInput style={styles.field} placeholder="例如：每天提醒喝水" placeholderTextColor={colors.textSub} value={draftTitle} onChangeText={setDraftTitle} />
-        <Text style={styles.fieldLabel}>描述</Text>
-        <TextInput style={[styles.field, {height: 72}]} placeholder="可选" placeholderTextColor={colors.textSub} value={draftDesc} onChangeText={setDraftDesc} multiline />
-        <TouchableOpacity style={[styles.createBtn, {opacity: draftTitle.trim() ? 1 : 0.4}]} onPress={create} disabled={!draftTitle.trim()}>
-          <Text style={styles.createBtnText}>创建任务</Text>
-        </TouchableOpacity>
-      </BottomSheet>
+      <TaskDialog
+        visible={dialogOpen}
+        mode={dialogMode}
+        task={editing}
+        onClose={() => setDialogOpen(false)}
+        onSaved={reload}
+      />
     </View>
   );
 }
@@ -195,12 +190,4 @@ const styles = StyleSheet.create({
   desc: {fontSize: 14, color: colors.textSub, lineHeight: 21, marginBottom: 16},
   cardFooter: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.bgSecondary},
   status: {fontSize: 12, color: colors.textSub, fontWeight: '600'},
-  sheetHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24},
-  sheetTitle: {fontSize: 18, fontWeight: '700', color: colors.textMain, marginBottom: 6},
-  sheetSub: {fontSize: 13, color: colors.textSub},
-  sheetClose: {width: 32, height: 32, borderRadius: 16, backgroundColor: colors.bgSecondary, alignItems: 'center', justifyContent: 'center'},
-  fieldLabel: {fontSize: 14, fontWeight: '600', color: colors.textMain, marginBottom: 12, marginTop: 4},
-  field: {backgroundColor: colors.bgSecondary, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15, color: colors.textMain, marginBottom: 20},
-  createBtn: {backgroundColor: colors.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 4},
-  createBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
 });

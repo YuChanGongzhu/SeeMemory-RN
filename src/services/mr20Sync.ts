@@ -83,14 +83,21 @@ function ensureMp3Name(fname: string): string {
 /** 同步录音在手机 Documents 下的根目录（落盘到 mr20/<dir>/<fname>.mp3）。 */
 export const MR20_FILES_ROOT = 'mr20';
 
+/** 录音在 Documents 下的相对路径 mr20/<dir>/<fname>.mp3（BLE 与 WiFi 落盘共用）。 */
+export function mr20FileRelPath(dir: string, fname: string): string {
+  return `${MR20_FILES_ROOT}/${dir}/${ensureMp3Name(fname)}`;
+}
+
 /** 把 MP3 字节落盘到 Documents/mr20/<dir>/<fname>，返回绝对路径。 */
 export async function writeMp3ToDisk(
   dir: string,
   fname: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  const relativePath = `${MR20_FILES_ROOT}/${dir}/${ensureMp3Name(fname)}`;
-  return Mr20Native.writeBase64File(relativePath, bytesToBase64(bytes));
+  return Mr20Native.writeBase64File(
+    mr20FileRelPath(dir, fname),
+    bytesToBase64(bytes),
+  );
 }
 
 /**

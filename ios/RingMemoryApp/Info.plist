@@ -50,6 +50,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>连接设备 WiFi 热点后，需通过本地网络高速传输录音文件。</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>imemory needs Bluetooth access to connect to your smart ring device.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

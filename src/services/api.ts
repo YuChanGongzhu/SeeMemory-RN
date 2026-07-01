@@ -159,11 +159,17 @@ export async function getPresignedUrl(
   // 用登录态 auth_token (Bearer) 鉴权，返回 {code,msg,data:{presignedUrl,objectUrl}} 信封。
   // （旧实现打的是 seemem.com/api/v1/memory/getPresignedUrl，那是另一套鉴权，
   //   会返回「authorization 无效」。scene 必须是后端 FileUploadEnum 的合法值。）
-  const data = await baseRequest<PresignedUrlPayload>({
-    method: 'GET',
-    path: '/common/getPresignedUrl',
-    query: {fileExtension, scene},
-  });
+  let data: PresignedUrlPayload;
+  try {
+    data = await baseRequest<PresignedUrlPayload>({
+      method: 'GET',
+      path: '/common/getPresignedUrl',
+      query: {fileExtension, scene},
+    });
+  } catch (e) {
+    // 区分「拿预签名就失败」（连不上 ms.seemem.com / 登录态失效）和「传 COS 失败」。
+    throw new Error(`获取预签名失败: ${String((e as Error)?.message || e)}`);
+  }
 
   if (!data?.presignedUrl || !data?.objectUrl) {
     throw new Error('获取预签名地址失败：返回为空');
@@ -177,19 +183,33 @@ export async function putFileToPresignedUrl(
   filePath: string,
   contentType: string
 ): Promise<void> {
-  const localFileResponse = await fetch(normalizeFileUri(filePath));
-  if (!localFileResponse.ok) {
-    throw new Error(`Failed to read local file: ${filePath}`);
+  let fileBlob: Blob;
+  try {
+    const localFileResponse = await fetch(normalizeFileUri(filePath));
+    if (!localFileResponse.ok) {
+      throw new Error(`Failed to read local file: ${filePath}`);
+    }
+    fileBlob = await localFileResponse.blob();
+  } catch (e) {
+    // 读本地文件失败：路径失效/文件被清理。区别于「传 COS 网络失败」。
+    throw new Error(`读取本地录音失败(${filePath}): ${String((e as Error)?.message || e)}`);
   }
 
-  const fileBlob = await localFileResponse.blob();
-  const uploadResponse = await fetch(presignedUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': contentType,
-    },
-    body: fileBlob,
-  });
+  // 提取 COS 主机，网络失败时能一眼看出是不是主机不可达/被 ATS 拦。
+  const cosHost = presignedUrl.replace(/^https?:\/\//, '').split('/')[0];
+  let uploadResponse: Response;
+  try {
+    uploadResponse = await fetch(presignedUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': contentType,
+      },
+      body: fileBlob,
+    });
+  } catch (e) {
+    // fetch 直接抛（TypeError: Network request failed）= 连不上 COS，不是 HTTP 错误码。
+    throw new Error(`上传 COS 失败(${cosHost}): ${String((e as Error)?.message || e)}`);
+  }
 
   if (!uploadResponse.ok) {
     const errorText = await uploadResponse.text();

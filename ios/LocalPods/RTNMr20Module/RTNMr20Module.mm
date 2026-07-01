@@ -49,6 +49,31 @@ RCT_EXTERN_METHOD(deleteRelativePath:(NSString *)relativePath
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(wifiJoin:(NSString *)ssid
+                  pwd:(NSString *)pwd
+                  timeoutMs:(double)timeoutMs
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(wifiLeave:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(wifiConnect:(NSString *)host
+                  port:(double)port
+                  transferId:(NSString *)transferId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(wifiReceiveFile:(NSString *)relativePath
+                  expectedLen:(double)expectedLen
+                  transferId:(NSString *)transferId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(wifiAbort:(NSString *)transferId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 @end
 
 #if __has_include("RingMemoryAppSpec/RingMemoryAppSpec.h") || __has_include(<RingMemoryAppSpec/RingMemoryAppSpec.h>)

@@ -10,6 +10,7 @@ import {GradientBg} from '../ui/Gradient';
 import {TimelineNode} from '../ui/TimelineNode';
 import {BottomSheet} from '../ui/BottomSheet';
 import {useWriteGate} from '../hooks/useWriteGate';
+import {useMr20Playback} from '../hooks/useMr20Playback';
 import {useNav} from '../navigation/nav';
 import type {MemoryCard, TimelineRecord} from '../types/memory';
 
@@ -28,6 +29,7 @@ export function MemoryDetail() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const gate = useWriteGate();
+  const player = useMr20Playback();
   const card: MemoryCard = nav.current.params?.card;
 
   const [activeTab, setActiveTab] = useState<'origin' | 'append'>('origin');
@@ -78,6 +80,10 @@ export function MemoryDetail() {
   const flash = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
+  };
+  // 点录音胶囊：播放/暂停远程录音（playingId 用 url 作 key）。失败给提示。
+  const togglePlay = (url: string) => {
+    player.toggle(url, url).catch(() => flash('无法播放该录音'));
   };
   const share = (action: string) => {
     setShowShare(false);
@@ -192,7 +198,13 @@ export function MemoryDetail() {
                             <Text style={styles.tlTime}>{node.time}</Text>
                             {node.clusterName ? <View style={styles.clusterBadge}><Text style={styles.clusterBadgeText}>{node.clusterName}</Text></View> : null}
                           </View>
-                          <TimelineNode node={node} />
+                          <TimelineNode
+                            node={node}
+                            playing={!!node.url && player.playingId === node.url}
+                            onTogglePlay={togglePlay}
+                            playbackTime={player.playingId === node.url ? player.currentTime : undefined}
+                            playbackDuration={player.playingId === node.url ? player.duration : undefined}
+                          />
                         </View>
                       </View>
                     );
@@ -215,7 +227,13 @@ export function MemoryDetail() {
                               <View style={styles.dotHollowGray} />
                               <View style={{flex: 1, minWidth: 0}}>
                                 <Text style={[styles.tlTime, {marginBottom: 8}]}>{node.time}</Text>
-                                <TimelineNode node={node} />
+                                <TimelineNode
+                            node={node}
+                            playing={!!node.url && player.playingId === node.url}
+                            onTogglePlay={togglePlay}
+                            playbackTime={player.playingId === node.url ? player.currentTime : undefined}
+                            playbackDuration={player.playingId === node.url ? player.duration : undefined}
+                          />
                               </View>
                             </View>
                           ))}

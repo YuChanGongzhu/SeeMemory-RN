@@ -43,9 +43,32 @@ export interface IngestInput {
   recMode?: 'call' | 'conversation';
 }
 
-/** 提交给后端批处理用的文件名：保证带 .mp3，后端据此解析 recordedAt 并回填匹配。 */
+/** 提交给后端批处理用的文件名：保证带 .mp3，仅作展示与回填匹配（后端不再据此解析时间）。 */
 export function batchFileName(item: {fname: string}): string {
   return /\.mp3$/i.test(item.fname) ? item.fname : `${item.fname}.mp3`;
+}
+
+function formatEventTime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
+/**
+ * 后端 `/audio/batch` 必填的录制时刻（显式 event time），格式 `yyyy-MM-dd HH:mm:ss`。
+ * 后端已改为按此字段（而非文件名）解析录音时间，故前端必须显式回传。
+ * 优先从 MR20 落盘文件名解析（`YYYY-MM-DD HH-MM-SS.mp3`，时间段用 `-` 分隔），
+ * 解析不出再退回 createdAt。
+ */
+export function batchDate(item: {fname: string; createdAt: number}): string {
+  const base = item.fname.replace(/\.mp3$/i, '').trim();
+  const m = base.match(/^(\d{4}-\d{2}-\d{2})[ _](\d{2})-(\d{2})-(\d{2})$/);
+  if (m) {
+    return `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
+  }
+  return formatEventTime(new Date(item.createdAt));
 }
 
 async function readInbox(): Promise<Mr20InboxItem[]> {

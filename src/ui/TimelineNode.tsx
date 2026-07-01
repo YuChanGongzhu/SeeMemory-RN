@@ -1,18 +1,45 @@
 import React from 'react';
-import {View, Text, Image, StyleSheet} from 'react-native';
-import {Play, FileText} from 'lucide-react-native';
+import {View, Text, Image, TouchableOpacity, StyleSheet} from 'react-native';
+import {Play, Pause, FileText} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import type {TimelineRecord} from '../types/memory';
+
+/** 秒 → 'm:ss'；无效/为空返回 ''。 */
+function fmtSecs(s?: number): string {
+  if (s == null || !isFinite(s) || s < 0) return '';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
 
 /**
  * Renders one 溯源时间流 node by type — faithful to prototype renderTimelineNode
  * (App.jsx:1246): audio dark pill / video 16:9 cover+Play / images full-width /
  * doc file card / text gray block.
+ *
+ * `playing` + `onTogglePlay` 让音频胶囊可点击播放/暂停（url 通过 node.url 传给上层）。
  */
-export function TimelineNode({node}: {node: TimelineRecord}) {
+export function TimelineNode({
+  node,
+  playing,
+  onTogglePlay,
+  playbackTime,
+  playbackDuration,
+}: {
+  node: TimelineRecord;
+  playing?: boolean;
+  onTogglePlay?: (url: string) => void;
+  playbackTime?: number;
+  playbackDuration?: number;
+}) {
   const isAudio = !!node.audio || node.type === 'audio';
   const audioName = node.audio?.name || node.name || '语音记录';
-  const audioDur = node.audio?.duration || node.duration || '0:00';
+  const canPlay = isAudio && !!node.url && !!onTogglePlay;
+  // 播放中：显示真实「已播/总时长」（总时长由原生流式加载后回传）；否则回落静态时长。
+  const live = playing
+    ? [fmtSecs(playbackTime), fmtSecs(playbackDuration)].filter(Boolean).join(' / ')
+    : '';
+  const audioDur = live || node.audio?.duration || node.duration || (playing ? '播放中…' : '0:00');
 
   const videoCover = node.video?.cover || (node.type === 'video' ? node.url : undefined);
   const videoDur = node.video?.duration;
@@ -26,15 +53,23 @@ export function TimelineNode({node}: {node: TimelineRecord}) {
   return (
     <View style={{gap: 10}}>
       {isAudio ? (
-        <View style={styles.audio}>
+        <TouchableOpacity
+          activeOpacity={canPlay ? 0.8 : 1}
+          disabled={!canPlay}
+          onPress={canPlay ? () => onTogglePlay!(node.url!) : undefined}
+          style={styles.audio}>
           <View style={styles.audioPlay}>
-            <Play size={20} fill={colors.textMain} color={colors.textMain} style={{marginLeft: 2}} />
+            {playing ? (
+              <Pause size={20} fill={colors.textMain} color={colors.textMain} />
+            ) : (
+              <Play size={20} fill={colors.textMain} color={colors.textMain} style={{marginLeft: 2}} />
+            )}
           </View>
           <View style={{flex: 1, minWidth: 0}}>
             <Text style={styles.audioName} numberOfLines={1}>{audioName}</Text>
             <Text style={styles.audioDur}>{audioDur}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
       ) : null}
 
       {videoCover || (node.type === 'video' && !node.video) ? (

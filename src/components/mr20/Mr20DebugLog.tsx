@@ -1,29 +1,27 @@
 import React, {useState} from 'react';
 import {View, Text, StyleSheet, TouchableOpacity, ScrollView} from 'react-native';
-import {useTheme} from '../../theme/ThemeProvider';
 
 /**
  * 开发期协议调试面板：展示 Mr20Client 收发的原始 GJJY 帧。
  * 用于在真机上敲定协议未写明的分帧/粘包细节。
+ * 注意：不依赖 ThemeProvider（硬件页子树未套 ThemeProvider），颜色写死。
  */
 export function Mr20DebugLog({logs}: {logs: string[]}) {
-  const {theme} = useTheme();
-  const c = theme.colors;
   const [open, setOpen] = useState(false);
 
   return (
     <View style={styles.wrap}>
       <TouchableOpacity
-        style={[styles.toggle, {borderColor: c.border}]}
+        style={[styles.toggle, {borderColor: '#E5E5EA'}]}
         onPress={() => setOpen(o => !o)}
         activeOpacity={0.7}>
-        <Text style={[styles.toggleText, {color: c.textMuted}]}>
+        <Text style={[styles.toggleText, {color: '#8E8E93'}]}>
           协议调试日志 ({logs.length}) {open ? '▾' : '▸'}
         </Text>
       </TouchableOpacity>
       {open ? (
         <ScrollView
-          style={[styles.box, {backgroundColor: '#11140F', borderColor: c.border}]}
+          style={[styles.box, {backgroundColor: '#11140F', borderColor: '#E5E5EA'}]}
           nestedScrollEnabled>
           {logs.length === 0 ? (
             <Text style={styles.empty}>暂无收发记录</Text>

@@ -1,22 +1,25 @@
 import EventSource from 'react-native-sse';
 import type {ChatMessage} from '../types/chat';
+import {BASE_API_URL} from '../apis/core/request';
+import {getAuthToken, handleUnauthorized} from '../apis/core/session';
 
-export interface OpenAIMessage {
+export interface ChatTurn {
   role: 'user' | 'assistant';
   content: string;
 }
 
-export function toOpenAIMessages(messages: ChatMessage[]): OpenAIMessage[] {
+/** ChatMessage[] → 后端 /app/chat 需要的 {role,content}[]（仅保留有内容的 user/assistant）。 */
+export function toChatTurns(messages: ChatMessage[]): ChatTurn[] {
   return messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && m.text.trim())
     .map(m => ({role: m.role as 'user' | 'assistant', content: m.text}));
 }
 
+/** @deprecated 名称沿用旧实现，等价于 toChatTurns。 */
+export const toOpenAIMessages = toChatTurns;
+
 export interface StreamChatParams {
-  subDomain: string;
-  deviceToken: string;
-  messages: OpenAIMessage[];
-  model?: string;
+  messages: ChatTurn[];
   onDelta: (fullText: string) => void;
   onDone: (fullText: string) => void;
   onError: (message: string) => void;
@@ -26,28 +29,17 @@ export interface StreamHandle {
   abort: () => void;
 }
 
-// Streams a chat completion from the selected memory box's hermes agent
-// (POST {subDomain}.remote.seemem.com/api/chat/completions, SSE).
-// React Native's fetch can't read a streaming response body, so we use
-// react-native-sse (XHR-based) which supports POST + custom headers.
+// 与 see-mem-studio-web 的 butler/chat-adapter 对齐：登录用户走 manager-api
+//   POST https://ms.seemem.com/api/app/chat
+// 用登录态 auth_token (Bearer) 鉴权，请求体只收 {messages:[{role,content}]}，
+// 自定义 SSE 流式返回：data: {"delta":"..."} ... data: [DONE]（出错为 data: {"error":"..."}）。
+// 后端按当前记忆 mode 自动分流云端 imemory / 本地盒子，前端不再直连 remote.seemem.com。
+// RN 的 fetch 读不了流式 body，因此用 react-native-sse（XHR）支持 POST + 自定义头。
 export function streamChat(params: StreamChatParams): StreamHandle {
-  const {subDomain, deviceToken, messages, model = 'SeeMemory LLM', onDelta, onDone, onError} = params;
+  const {messages, onDelta, onDone, onError} = params;
 
-  const url = `https://${subDomain}.remote.seemem.com/api/chat/completions`;
   let assistantText = '';
   let finished = false;
-
-  const es = new EventSource(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${deviceToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({model, messages, stream: true}),
-    // Disable auto-reconnect: a chat completion is a one-shot stream.
-    pollingInterval: 0,
-    timeout: 60000,
-  });
 
   const finish = (kind: 'done' | 'error', message?: string) => {
     if (finished) {
@@ -63,6 +55,27 @@ export function streamChat(params: StreamChatParams): StreamHandle {
     }
   };
 
+  const token = getAuthToken();
+  if (!token) {
+    // 与 baseRequest 的 401 行为一致：驱动回登录态，并把错误回传给 UI。
+    handleUnauthorized();
+    onError('登录已过期，请重新登录');
+    return {abort: () => {}};
+  }
+
+  const url = `${BASE_API_URL}/app/chat`;
+  const es = new EventSource(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({messages}),
+    // Disable auto-reconnect: a chat completion is a one-shot stream.
+    pollingInterval: 0,
+    timeout: 60000,
+  });
+
   es.addEventListener('message', event => {
     const data = (event.data || '').trim();
     if (!data || data === '[DONE]') {
@@ -72,10 +85,13 @@ export function streamChat(params: StreamChatParams): StreamHandle {
       return;
     }
     try {
-      const parsed = JSON.parse(data);
-      const delta = parsed?.choices?.[0]?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        assistantText += delta;
+      const parsed = JSON.parse(data) as {delta?: unknown; error?: unknown};
+      if (typeof parsed.error === 'string' && parsed.error) {
+        finish('error', parsed.error);
+        return;
+      }
+      if (typeof parsed.delta === 'string' && parsed.delta) {
+        assistantText += parsed.delta;
         onDelta(assistantText);
       }
     } catch {
@@ -84,10 +100,16 @@ export function streamChat(params: StreamChatParams): StreamHandle {
   });
 
   es.addEventListener('error', event => {
+    const status = 'xhrStatus' in event ? event.xhrStatus : undefined;
+    if (status === 401) {
+      handleUnauthorized();
+      finish('error', '登录已过期，请重新登录');
+      return;
+    }
     const message =
       'message' in event && event.message
         ? event.message
-        : `连接出错（${'xhrStatus' in event ? event.xhrStatus : ''}）`;
+        : `连接出错（${status ?? ''}）`;
     finish('error', message);
   });
 

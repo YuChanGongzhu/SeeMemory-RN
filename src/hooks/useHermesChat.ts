@@ -69,10 +69,7 @@ export function useHermesChat() {
       if (!content) {
         return false;
       }
-      if (!selectedDevice) {
-        appendSystemMessage('请先在「设置」中选择一个记忆盒子，再开始对话。');
-        return false;
-      }
+      // /app/chat 按登录用户维度，后端自动分流云端/本地盒子，无需选中设备。
       if (isSending) {
         return false;
       }
@@ -102,8 +99,6 @@ export function useHermesChat() {
         };
 
         streamRef.current = streamChat({
-          subDomain: selectedDevice.subDomain,
-          deviceToken: selectedDevice.deviceToken,
           messages: outbound,
           onDelta: fullText => updateAssistant({text: fullText, isStreaming: true}),
           onDone: fullText => {
@@ -126,7 +121,7 @@ export function useHermesChat() {
         });
       });
     },
-    [appendSystemMessage, isSending, messages, selectedDevice],
+    [appendSystemMessage, isSending, messages],
   );
 
   const sendImageMessage = useCallback(

@@ -1,6 +1,26 @@
 import Foundation
 import React
 import CoreBluetooth
+import NetworkExtension
+import Network
+
+/// 单次 WiFi 快传的上下文：TCP 连接 + 落盘句柄 + 收流计数 + connect/receive 两段回调。
+/// 「先连后收」两步共享它（wifiConnect 建连接，wifiReceiveFile 在其上收流）。
+private final class WifiXfer {
+  let conn: NWConnection
+  var connSettled = false
+  var connResolve: RCTPromiseResolveBlock?
+  var connReject: RCTPromiseRejectBlock?
+  var handle: FileHandle?
+  var expected = 0 // 落盘目标字节（不含 5 字节尾标）
+  var written = 0
+  var receivedTotal = 0
+  var recvSettled = false
+  var recvResolve: RCTPromiseResolveBlock?
+  var recvReject: RCTPromiseRejectBlock?
+  var filePath = ""
+  init(_ conn: NWConnection) { self.conn = conn }
+}
 
 /// MR20「记忆粒」通用 BLE 原语（CoreBluetooth）。不含 GJJY 协议逻辑——
 /// 协议编解码全在 JS 的 protocol.ts；本模块只做 扫描/连接/写/订阅/落盘。
@@ -19,6 +39,11 @@ class RTNMr20Module: RCTEventEmitter {
   private var connectReject: RCTPromiseRejectBlock?
   private var pendingServiceCount = 0
 
+  // WiFi 快传：进行中的传输上下文（按 transferId 索引，供 abort）+ 已加入的热点 SSID。
+  private var wifiXfers: [String: WifiXfer] = [:]
+  private var joinedSSID: String?
+  private let wifiQueue = DispatchQueue(label: "mr20.wifi")
+
   override init() {
     super.init()
     central = CBCentralManager(delegate: self, queue: nil)
@@ -27,7 +52,7 @@ class RTNMr20Module: RCTEventEmitter {
   @objc override static func requiresMainQueueSetup() -> Bool { true }
 
   override func supportedEvents() -> [String]! {
-    ["onDeviceFound", "onConnected", "onDisconnected", "onCharValue", "onError", "onBleState"]
+    ["onDeviceFound", "onConnected", "onDisconnected", "onCharValue", "onError", "onBleState", "onWifiProgress"]
   }
 
   override func startObserving() { hasListeners = true }
@@ -199,6 +224,203 @@ class RTNMr20Module: RCTEventEmitter {
     } catch {
       reject("FILE_ERR", error.localizedDescription, error)
     }
+  }
+
+  // MARK: - WiFi 快传（NEHotspotConfiguration 入网 + Network.framework 收流）
+
+  /// 程序化加入设备热点。系统弹一次确认框；已关联也视为成功。失败 resolve(false)，
+  /// 上层降级到引导手动连接。
+  @objc(wifiJoin:pwd:timeoutMs:resolve:reject:)
+  func wifiJoin(_ ssid: String,
+                pwd: String,
+                timeoutMs _: Double,
+                resolve: @escaping RCTPromiseResolveBlock,
+                reject _: @escaping RCTPromiseRejectBlock) {
+    let config = NEHotspotConfiguration(ssid: ssid, passphrase: pwd, isWEP: false)
+    config.joinOnce = true // 不持久化，App 退出/传完即释放
+    NEHotspotConfigurationManager.shared.apply(config) { [weak self] error in
+      if let e = error as NSError? {
+        if e.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
+          self?.joinedSSID = ssid
+          resolve(true)
+        } else {
+          resolve(false)
+        }
+        return
+      }
+      self?.joinedSSID = ssid
+      resolve(true)
+    }
+  }
+
+  /// 移除已加入的设备热点配置（释放，回到原网络）。
+  @objc(wifiLeave:reject:)
+  func wifiLeave(_ resolve: @escaping RCTPromiseResolveBlock,
+                 reject _: @escaping RCTPromiseRejectBlock) {
+    if let ssid = joinedSSID {
+      NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+      joinedSSID = nil
+    }
+    resolve(nil)
+  }
+
+  /// 中断指定 transferId 的连接/接收（关 socket）。不存在视为成功。
+  @objc(wifiAbort:resolve:reject:)
+  func wifiAbort(_ transferId: String,
+                 resolve: @escaping RCTPromiseResolveBlock,
+                 reject _: @escaping RCTPromiseRejectBlock) {
+    wifiXfers[transferId]?.conn.cancel()
+    resolve(nil)
+  }
+
+  /// 先建立到 host:port 的 TCP 连接（**必须早于 BLE 下发 W 指令**，否则设备推的字节丢失卡 0）。
+  /// socket ready 即 resolve；失败/8s 超时 reject。连接句柄按 transferId 暂存供收流。
+  /// requiredInterfaceType=.wifi 强制走设备热点。
+  @objc(wifiConnect:port:transferId:resolve:reject:)
+  func wifiConnect(_ host: String,
+                   port: Double,
+                   transferId: String,
+                   resolve: @escaping RCTPromiseResolveBlock,
+                   reject: @escaping RCTPromiseRejectBlock) {
+    let params = NWParameters.tcp
+    params.requiredInterfaceType = .wifi
+    let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8475
+    let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
+    let xfer = WifiXfer(conn)
+    xfer.connResolve = resolve
+    xfer.connReject = reject
+    wifiXfers[transferId] = xfer
+
+    conn.stateUpdateHandler = { [weak self] state in
+      switch state {
+      case .ready:
+        if !xfer.connSettled {
+          xfer.connSettled = true
+          xfer.connResolve?(nil)
+        }
+      case let .failed(err):
+        if !xfer.connSettled {
+          xfer.connSettled = true
+          xfer.connReject?("WIFI_CONN_ERR", err.localizedDescription, nil)
+          self?.wifiXfers.removeValue(forKey: transferId)
+        } else {
+          self?.failRecv(transferId, err.localizedDescription)
+        }
+      case .cancelled:
+        if !xfer.connSettled {
+          xfer.connSettled = true
+          xfer.connReject?("WIFI_CONN_ERR", "连接已取消", nil)
+          self?.wifiXfers.removeValue(forKey: transferId)
+        } else {
+          self?.failRecv(transferId, "已中断")
+        }
+      default:
+        break
+      }
+    }
+    conn.start(queue: wifiQueue)
+    // 连接超时（设备热点未连上/权限未授予时 8s 后报错，而非无限卡住）
+    wifiQueue.asyncAfter(deadline: .now() + 8) { [weak self] in
+      guard let xfer = self?.wifiXfers[transferId], !xfer.connSettled else { return }
+      xfer.connSettled = true
+      conn.cancel()
+      xfer.connReject?("WIFI_CONN_TIMEOUT", "连接设备热点超时", nil)
+      self?.wifiXfers.removeValue(forKey: transferId)
+    }
+  }
+
+  /// 在 wifiConnect 建好的 socket 上收流，落盘到 Documents/relativePath，返回绝对路径。
+  /// 按 expectedLen 长度剥离尾部 5 字节结束标记（BA 5A 02 8F 04）：只写到 expectedLen 为止，超出即标记丢弃。
+  @objc(wifiReceiveFile:expectedLen:transferId:resolve:reject:)
+  func wifiReceiveFile(_ relativePath: String,
+                       expectedLen: Double,
+                       transferId: String,
+                       resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    guard let xfer = wifiXfers[transferId] else {
+      reject("WIFI_NO_CONN", "socket 未连接（请先 wifiConnect）", nil)
+      return
+    }
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let fileURL = docs.appendingPathComponent(relativePath)
+    do {
+      try FileManager.default.createDirectory(
+        at: fileURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+    } catch {
+      reject("WIFI_FILE_ERR", error.localizedDescription, error)
+      return
+    }
+    guard let handle = try? FileHandle(forWritingTo: fileURL) else {
+      reject("WIFI_FILE_ERR", "无法打开文件写入", nil)
+      return
+    }
+    xfer.handle = handle
+    xfer.expected = max(0, Int(expectedLen))
+    xfer.filePath = fileURL.path
+    xfer.recvResolve = resolve
+    xfer.recvReject = reject
+    receiveLoop(transferId)
+  }
+
+  private func receiveLoop(_ transferId: String) {
+    guard let xfer = wifiXfers[transferId] else { return }
+    let markerLen = 5
+    xfer.conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) {
+      [weak self] data, _, isComplete, error in
+      guard let self = self, let xfer = self.wifiXfers[transferId] else { return }
+      if let error = error {
+        self.failRecv(transferId, error.localizedDescription)
+        return
+      }
+      if let data = data, !data.isEmpty {
+        xfer.receivedTotal += data.count
+        if xfer.written < xfer.expected {
+          let canWrite = min(data.count, xfer.expected - xfer.written)
+          if canWrite > 0 {
+            xfer.handle?.write(Data(data.prefix(canWrite)))
+            xfer.written += canWrite
+          }
+        }
+        self.emit("onWifiProgress", [
+          "transferId": transferId,
+          "received": xfer.written,
+          "total": xfer.expected,
+        ])
+      }
+      if xfer.written >= xfer.expected && xfer.receivedTotal >= xfer.expected + markerLen {
+        self.finishRecvOk(transferId)
+        return
+      }
+      if isComplete {
+        self.finishRecvOk(transferId)
+        return
+      }
+      if xfer.recvSettled { return }
+      self.receiveLoop(transferId)
+    }
+  }
+
+  private func finishRecvOk(_ transferId: String) {
+    guard let xfer = wifiXfers[transferId], !xfer.recvSettled else { return }
+    xfer.recvSettled = true
+    try? xfer.handle?.close()
+    xfer.conn.stateUpdateHandler = nil
+    xfer.conn.cancel()
+    wifiXfers.removeValue(forKey: transferId)
+    xfer.recvResolve?(xfer.filePath)
+  }
+
+  private func failRecv(_ transferId: String, _ msg: String) {
+    guard let xfer = wifiXfers[transferId], !xfer.recvSettled else { return }
+    xfer.recvSettled = true
+    try? xfer.handle?.close()
+    xfer.conn.stateUpdateHandler = nil
+    xfer.conn.cancel()
+    wifiXfers.removeValue(forKey: transferId)
+    xfer.recvReject?("WIFI_RECV_ERR", msg, nil)
   }
 
   private func failConnect(_ message: String) {

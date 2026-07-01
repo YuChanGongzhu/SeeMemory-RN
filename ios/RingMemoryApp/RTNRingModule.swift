@@ -25,6 +25,8 @@ class RTNRingModule: RCTEventEmitter {
     private var captureSessionID = 0
     private var pendingCaptureRetry: DispatchWorkItem?
     private var audioPlayer: AVAudioPlayer?
+    // 远程 URL（云端录音）用 AVPlayer 流式播放；AVAudioPlayer 只支持本地文件。
+    private var remotePlayer: AVPlayer?
     private var currentCaptureFormat: CaptureAudioFormat = .adpcm
     private var capturePacketOrder = 0
     private var pcmWarmupDeadline: TimeInterval = 0
@@ -350,6 +352,39 @@ class RTNRingModule: RCTEventEmitter {
     func playAudioFile(_ filePath: String,
                        resolve: @escaping RCTPromiseResolveBlock,
                        reject: @escaping RCTPromiseRejectBlock) {
+        // 远程 URL（http/https）走 AVPlayer 流式播放；本地文件保持原 AVAudioPlayer 逻辑不变。
+        if filePath.hasPrefix("http://") || filePath.hasPrefix("https://"),
+           let remoteURL = URL(string: filePath) {
+            do {
+                let audioSession = AVAudioSession.sharedInstance()
+                try audioSession.setCategory(.playback, mode: .default)
+                try audioSession.setActive(true, options: [])
+            } catch {
+                reject("AUDIO_PLAYBACK_ERROR", error.localizedDescription, error)
+                return
+            }
+            audioPlayer?.stop()
+            remotePlayer?.pause()
+            let asset = AVURLAsset(url: remoteURL)
+            remotePlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            remotePlayer?.play()
+            emitDebugLog("开始流式播放远程录音: \(remoteURL.lastPathComponent)")
+            // 异步读取真实总时长后再 resolve（播放已先行开始，不阻塞出声）。
+            Task {
+                var seconds = 0.0
+                if let dur = try? await asset.load(.duration) {
+                    let s = CMTimeGetSeconds(dur)
+                    if s.isFinite, s > 0 { seconds = s }
+                }
+                resolve([
+                    "duration": seconds,
+                    "size": 0,
+                    "started": true,
+                ])
+            }
+            return
+        }
+
         let url = URL(fileURLWithPath: filePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             reject("AUDIO_PLAYBACK_ERROR", "Audio file not found", nil)
@@ -388,6 +423,8 @@ class RTNRingModule: RCTEventEmitter {
                            reject _: @escaping RCTPromiseRejectBlock) {
         audioPlayer?.stop()
         audioPlayer = nil
+        remotePlayer?.pause()
+        remotePlayer = nil
         emitDebugLog("停止播放录音")
         resolve(nil)
     }

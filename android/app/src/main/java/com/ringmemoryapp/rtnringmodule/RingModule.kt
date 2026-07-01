@@ -290,6 +290,40 @@ class RingModule(reactContext: ReactApplicationContext) : NativeRingModuleSpec(r
 
     override fun playAudioFile(filePath: String, promise: Promise) {
         try {
+            // 远程 URL（云端录音）：MediaPlayer 直接吃 http(s)，异步 prepare 后播放，
+            // prepare 完成拿到真实总时长再 resolve。
+            if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+                mediaPlayer?.release()
+                var settled = false
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(filePath)
+                    setOnPreparedListener {
+                        it.start()
+                        if (!settled) {
+                            settled = true
+                            promise.resolve(Arguments.createMap().apply {
+                                putDouble("duration", it.duration.toDouble() / 1000.0)
+                            })
+                        }
+                    }
+                    setOnErrorListener { mp, what, extra ->
+                        if (!settled) {
+                            settled = true
+                            promise.reject("AUDIO_PLAYBACK_ERROR", "Streaming failed ($what/$extra)")
+                        }
+                        mp.release()
+                        if (mediaPlayer === mp) mediaPlayer = null
+                        true
+                    }
+                    setOnCompletionListener {
+                        it.release()
+                        if (mediaPlayer === it) mediaPlayer = null
+                    }
+                    prepareAsync()
+                }
+                return
+            }
+
             val file = File(filePath)
             if (!file.exists()) {
                 promise.reject("AUDIO_PLAYBACK_ERROR", "Audio file not found")

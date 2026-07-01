@@ -202,7 +202,30 @@ export const Cmd = {
   bleOff: () => buildCommand('BLE', 'OFF'),
   /** 断开 BLE、重置密钥并格式化磁盘。 */
   bleReset: () => buildCommand('BLE', 'RESET'),
+  // --- WiFi 快传（控制信令走 BLE，文件字节走 WiFi TCP 192.168.200.1:8475）---
+  /** 开启设备 WiFi 热点（进 AP 模式）。 */
+  wifiOpen: () => buildCommand('WIFIO'),
+  /** 关闭设备 WiFi 热点。 */
+  wifiClose: () => buildCommand('WIFIC'),
+  /** 获取热点 SSID 与密码。应答 GJJY_DEV&WIFI&SSID&PWD。 */
+  getWifi: () => buildCommand('WIFI'),
+  /** 查询 WiFi 状态（0~7）。应答 GJJY_DEV&WIFIS&STA。 */
+  getWifiState: () => buildCommand('WIFIS'),
+  /** 获取 WiFi 模组固件版本。 */
+  getWifiVersion: () => buildCommand('WF'),
+  /** WiFi 传输文件：App 无该文件时（拉全量）。应答 GJJY_DEV&W&LEN。 */
+  wifiFile: (dir: string, fname: string) => buildCommand('W', dir, fname),
+  /** WiFi 传输文件：App 已有 size 字节时（断点续传）。 */
+  wifiFileResume: (dir: string, fname: string, size: number) =>
+    buildCommand('W', dir, fname, String(size)),
 } as const;
+
+/**
+ * WiFi 传输流的结束标记：流的最后 5 字节固定为 BA 5A 02 8F 04。
+ * 收到即停止读取，且**必须从落盘文件剥掉**（落盘大小 = 收到字节数 - 5）。
+ * 原生 TCP 接收器持有一份相同常量做检测/剥离；此处导出供 JS 侧/单测引用。
+ */
+export const WIFI_END_MARKER = [0xba, 0x5a, 0x02, 0x8f, 0x04] as const;
 
 // ---------------------------------------------------------------------------
 // 应答解析（设备 -> App）
@@ -236,7 +259,10 @@ export type DeviceMessage =
   | {type: 'DELETE_ERR'}
   | {type: 'TRANSFER_SHUT'}
   | {type: 'USB_STATE'; sta: number} // USB&STA：Type-C 文件读取功能状态
-  | {type: 'WIFI_STATE'; state: string}
+  | {type: 'WIFI_STATE'; state: string} // WIFIS&STA：WiFi 状态码 0~7
+  | {type: 'WIFI_CRED'; ssid: string; pwd: string} // WIFI&SSID&PWD：热点凭据
+  | {type: 'WIFI_OPENED'} // WIFIO：热点已开
+  | {type: 'WIFI_CLOSED'} // WIFIC：热点已关
   | {type: 'UNKNOWN'; raw: string; tokens: string[]};
 
 /** 一个收到的帧（已 ascii 化）是否是文本命令帧。 */
@@ -341,6 +367,13 @@ export function parseDeviceMessage(rawInput: string): DeviceMessage {
       return {type: 'USB_STATE', sta: toInt(tokens[1])};
     case 'WIFIS':
       return {type: 'WIFI_STATE', state: tokens[1] ?? ''};
+    case 'WIFI':
+      // GJJY_DEV&WIFI&SSID&PWD。head 'WIFI' 与 'WIFIS' 是不同 token，互不冲突。
+      return {type: 'WIFI_CRED', ssid: tokens[1] ?? '', pwd: tokens[2] ?? ''};
+    case 'WIFIO':
+      return {type: 'WIFI_OPENED'};
+    case 'WIFIC':
+      return {type: 'WIFI_CLOSED'};
     default:
       return {type: 'UNKNOWN', raw, tokens};
   }

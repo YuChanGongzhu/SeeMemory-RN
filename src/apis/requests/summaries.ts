@@ -1,4 +1,4 @@
-import {deviceRequest} from '../core/request';
+import {baseRequest} from '../core/request';
 
 type SummaryPeriodType = 'daily' | 'weekly' | 'monthly' | 'custom';
 type SummaryType = 'time' | 'person' | 'event';
@@ -52,16 +52,16 @@ export interface ListMemorySummaryResponse {
 export function listMemorySummaries(
   data: ListMemorySummaryRequest,
 ): Promise<ListMemorySummaryResponse> {
-  return deviceRequest<ListMemorySummaryResponse>({
+  return baseRequest<ListMemorySummaryResponse>({
     method: 'POST',
-    path: '/memory/summary/list',
+    path: '/app/memory/summary/list',
     body: data,
   });
 }
 
 export function getMemorySummary(summaryId: string): Promise<MemorySummaryDetail> {
-  return deviceRequest<MemorySummaryDetail>({
+  return baseRequest<MemorySummaryDetail>({
     method: 'GET',
-    path: `/memory/summary/${summaryId}`,
+    path: `/app/memory/summary/${summaryId}`,
   });
 }

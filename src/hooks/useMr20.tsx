@@ -16,8 +16,10 @@ import {
   Mr20Client,
   Mr20ConnState,
   Mr20Device,
+  Mr20File,
   Mr20Status,
 } from '../native/mr20/Mr20Client';
+import {isMr20WifiAvailable} from '../native/mr20/Mr20Native';
 import {MR20_PAIR_KEY} from '../native/mr20/protocol';
 import {
   clearBatchGroupId,
@@ -30,6 +32,7 @@ import {
 } from '../services/mr20Storage';
 import {
   applyBatchResult,
+  batchDate,
   batchFileName,
   clearInbox,
   getInbox,
@@ -48,11 +51,36 @@ import {
 import {
   deleteAllLocalFiles,
   deleteLocalFiles,
+  listPendingFiles,
   scanDeviceFiles,
   syncAllFiles,
   Mr20DeviceFiles,
   SyncProgress,
 } from '../services/mr20Sync';
+import {
+  connectWifi,
+  disconnectWifi,
+  wifiSyncFiles,
+  WifiConnectStep,
+  WifiStepState,
+  WifiTransferProgress,
+} from '../services/mr20WifiSync';
+
+/** WiFi 快传整体阶段。 */
+export type WifiPhase =
+  | 'idle'
+  | 'connecting' // 开热点 + 入网（连接中清单展示）
+  | 'manual' // 自动入网失败，等用户手动连热点
+  | 'transferring' // 收流中
+  | 'done'
+  | 'error';
+
+/** WiFi 快传完成后的汇总（喂给完成页）。 */
+export interface WifiTransferSummary {
+  count: number; // 成功传输的文件数
+  bytes: number; // 成功传输的总字节
+  failed: number; // 失败数
+}
 
 /** 当前/最近一次后端批处理的轻量快照（喂给 UI 的进度/结果卡）。 */
 export interface Mr20BatchState {
@@ -78,6 +106,12 @@ interface Mr20ContextType {
   // 同步
   syncing: boolean;
   syncProgress: SyncProgress | null;
+  // WiFi 快传
+  wifiPhase: WifiPhase;
+  wifiSteps: Record<WifiConnectStep, WifiStepState>;
+  wifiProgress: WifiTransferProgress | null;
+  wifiCred: {ssid: string; pwd: string} | null; // 手动连接引导用
+  wifiSummary: WifiTransferSummary | null;
   // 设备上当前的录音文件统计（总数 / 待同步 / 字节）
   deviceFiles: Mr20DeviceFiles | null;
   inbox: Mr20InboxItem[];
@@ -97,6 +131,18 @@ interface Mr20ContextType {
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   stopSync: () => void;
+  // 列出设备上「尚未同步」的录音文件（供 WiFi 快传页勾选）。
+  listPendingDeviceFiles: () => Promise<Mr20File[]>;
+  // WiFi 热点管理（WifiManage 页用）：开/关热点、读当前 SSID/密码/状态。
+  openHotspot: () => Promise<void>;
+  closeHotspot: () => Promise<void>;
+  getHotspotInfo: () => Promise<{ssid: string; pwd: string; state: number} | null>;
+  // WiFi 快传：传入用户勾选的文件子集，自动走「开热点→入网→逐个收流→入库」。
+  startWifiTransfer: (files: Mr20File[]) => Promise<void>;
+  // 自动入网失败后，用户已手动连上热点，点此继续传输。
+  continueWifiAfterManualJoin: () => Promise<void>;
+  cancelWifiTransfer: () => void;
+  resetWifiTransfer: () => void;
   refreshDeviceFiles: () => Promise<void>;
   processInboxItem: (item: Mr20InboxItem) => Promise<void>;
   processItems: (items: Mr20InboxItem[]) => Promise<void>;
@@ -108,6 +154,8 @@ interface Mr20ContextType {
   stopRecording: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshInbox: () => Promise<void>;
+  syncTime: () => Promise<void>;
+  forgetDevice: () => Promise<void>;
   factoryReset: () => Promise<void>;
   clearError: () => void;
 }
@@ -124,6 +172,11 @@ const Mr20Context = createContext<Mr20ContextType>({
   recording: null,
   syncing: false,
   syncProgress: null,
+  wifiPhase: 'idle',
+  wifiSteps: {open: 'pending', join: 'pending', reachable: 'pending'},
+  wifiProgress: null,
+  wifiCred: null,
+  wifiSummary: null,
   deviceFiles: null,
   inbox: [],
   processingIds: [],
@@ -138,6 +191,14 @@ const Mr20Context = createContext<Mr20ContextType>({
   disconnect: noop,
   syncNow: noop,
   stopSync: () => {},
+  listPendingDeviceFiles: async () => [],
+  openHotspot: noop,
+  closeHotspot: noop,
+  getHotspotInfo: async () => null,
+  startWifiTransfer: noop,
+  continueWifiAfterManualJoin: noop,
+  cancelWifiTransfer: () => {},
+  resetWifiTransfer: () => {},
   refreshDeviceFiles: noop,
   processInboxItem: noop,
   processItems: noop,
@@ -149,6 +210,8 @@ const Mr20Context = createContext<Mr20ContextType>({
   stopRecording: noop,
   refreshStatus: noop,
   refreshInbox: noop,
+  syncTime: noop,
+  forgetDevice: noop,
   factoryReset: noop,
   clearError: () => {},
 });
@@ -190,6 +253,15 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const [recording, setRecording] = useState<{fname: string; seconds: number} | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [wifiPhase, setWifiPhase] = useState<WifiPhase>('idle');
+  const [wifiSteps, setWifiSteps] = useState<Record<WifiConnectStep, WifiStepState>>({
+    open: 'pending',
+    join: 'pending',
+    reachable: 'pending',
+  });
+  const [wifiProgress, setWifiProgress] = useState<WifiTransferProgress | null>(null);
+  const [wifiCred, setWifiCred] = useState<{ssid: string; pwd: string} | null>(null);
+  const [wifiSummary, setWifiSummary] = useState<WifiTransferSummary | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<Mr20DeviceFiles | null>(null);
   const [inbox, setInbox] = useState<Mr20InboxItem[]>([]);
   const [processingIds, setProcessingIds] = useState<string[]>([]);
@@ -203,6 +275,9 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const activeGroupRef = useRef<string | null>(null);
   // 同步中断标志：stopSync 置 true，syncAllFiles 每个文件前检查并停下。
   const syncCancelRef = useRef(false);
+  // WiFi 快传中断标志 + 待传文件（手动入网后续传用）。
+  const wifiCancelRef = useRef(false);
+  const wifiFilesRef = useRef<Mr20File[]>([]);
 
   // 懒加载 client + 绑定事件
   const getClient = useCallback((): Mr20Client => {
@@ -373,6 +448,148 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     clientRef.current?.abortTransfer().catch(() => undefined);
   }, []);
 
+  // -------------------------------------------------------------------------
+  // WiFi 快传
+  // -------------------------------------------------------------------------
+
+  // 列设备上待同步文件（WiFi 快传页勾选用）。与 BLE 列目录同类命令，调用方需串行触发。
+  const listPendingDeviceFiles = useCallback(async (): Promise<Mr20File[]> => {
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      return [];
+    }
+    return listPendingFiles(client).catch(() => []);
+  }, [connState]);
+
+  // 热点管理：开/关热点、读 SSID/密码/状态。BLE 命令串行，getHotspotInfo 顺序发。
+  const openHotspot = useCallback(async () => {
+    await clientRef.current?.openWifi();
+  }, []);
+  const closeHotspot = useCallback(async () => {
+    await clientRef.current?.closeWifi();
+  }, []);
+  const getHotspotInfo = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      return null;
+    }
+    const state = await client.getWifiState().catch(() => 0);
+    const cred = await client.getWifiCredentials().catch(() => ({ssid: '', pwd: ''}));
+    return {ssid: cred.ssid, pwd: cred.pwd, state};
+  }, [connState]);
+
+  // 传输循环（连接就绪后调用）：逐个 WiFi 收流落盘 → 登记入库 → 汇总。
+  const runWifiTransferLoop = useCallback(
+    async (client: Mr20Client, files: Mr20File[]) => {
+      setWifiPhase('transferring');
+      setWifiSteps(prev => ({...prev, reachable: 'done'}));
+      const results = await wifiSyncFiles(client, files, {
+        onProgress: p => setWifiProgress(p),
+        shouldCancel: () => wifiCancelRef.current,
+      });
+      const ok = results.filter(r => !r.error);
+      await refreshInbox();
+      // 刷新「待同步」数（快传完应减少）。
+      setDeviceFiles(await scanDeviceFiles(client).catch(() => null));
+      // 全部失败（且非用户主动取消）：多半是热点已关/未连上，报错让其重来，别误显示「成功」。
+      if (ok.length === 0 && results.length > 0 && !wifiCancelRef.current) {
+        setError('热点已关闭或未连接，请重新点开始快传（连热点后请尽快回到 App）。');
+        setWifiPhase('error');
+        return;
+      }
+      setWifiSummary({
+        count: ok.length,
+        bytes: ok.reduce((n, r) => n + (r.file.size || 0), 0),
+        failed: results.length - ok.length,
+      });
+      setWifiPhase('done');
+    },
+    [refreshInbox],
+  );
+
+  // 入口：开热点 → 取凭据 → 自动入网；成功直接传，失败转「引导手动连接」。
+  const startWifiTransfer = useCallback(
+    async (files: Mr20File[]) => {
+      const client = clientRef.current;
+      if (!client || !files.length) {
+        return;
+      }
+      // 原生未更新（未 pod install + 重新编译）时，wifiJoin/wifiReceiveFile 不存在，
+      // 直接调用会抛「undefined is not a function」。提前拦截给可操作提示。
+      if (!isMr20WifiAvailable) {
+        setError('WiFi 快传需要更新原生模块：请 cd ios && pod install 后重新编译运行 App。');
+        setWifiPhase('error');
+        return;
+      }
+      setError(null);
+      wifiCancelRef.current = false;
+      wifiFilesRef.current = files;
+      setWifiSummary(null);
+      setWifiProgress({total: files.length, completed: 0});
+      setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+      setWifiPhase('connecting');
+      try {
+        const conn = await connectWifi(client, (step, state) =>
+          setWifiSteps(prev => ({...prev, [step]: state})),
+        );
+        setWifiCred({ssid: conn.ssid, pwd: conn.pwd});
+        if (!conn.joined) {
+          // 自动入网被拒/失败 → 引导用户去系统设置手动连，再 continueWifiAfterManualJoin。
+          setWifiPhase('manual');
+          return;
+        }
+        await runWifiTransferLoop(client, files);
+      } catch (e) {
+        setError(String((e as Error)?.message || e));
+        setWifiPhase('error');
+      }
+    },
+    [runWifiTransferLoop],
+  );
+
+  // 用户已手动连上热点 → 继续传输（沿用上次勾选的文件）。
+  const continueWifiAfterManualJoin = useCallback(async () => {
+    const client = clientRef.current;
+    const files = wifiFilesRef.current;
+    if (!client || !files.length) {
+      return;
+    }
+    setError(null);
+    wifiCancelRef.current = false;
+    setWifiSteps(prev => ({...prev, join: 'done'}));
+    try {
+      await runWifiTransferLoop(client, files);
+    } catch (e) {
+      setError(String((e as Error)?.message || e));
+      setWifiPhase('error');
+    }
+  }, [runWifiTransferLoop]);
+
+  // 中断快传：置标志 + 关 socket 打断当前文件；已传完的保留在收件箱。退热点。
+  const cancelWifiTransfer = useCallback(() => {
+    wifiCancelRef.current = true;
+    const client = clientRef.current;
+    client?.abortWifi().catch(() => undefined);
+    if (client) {
+      disconnectWifi(client).catch(() => undefined);
+    }
+    setWifiPhase('idle');
+  }, []);
+
+  // 复位快传 UI 状态（关闭完成/失败页时调用）：顺手退热点释放设备电量。
+  const resetWifiTransfer = useCallback(() => {
+    wifiFilesRef.current = [];
+    const client = clientRef.current;
+    if (client) {
+      disconnectWifi(client).catch(() => undefined);
+    }
+    setWifiPhase('idle');
+    setWifiProgress(null);
+    setWifiSummary(null);
+    setWifiCred(null);
+    setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+  }, []);
+
   // 批处理完成：拉结果，回填转写 + 总结 + 问题。
   const finishBatch = useCallback(
     async (groupId: string) => {
@@ -464,6 +681,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         const payload = uploaded.map(u => ({
           url: u.audioUrl as string,
           fileName: batchFileName(u),
+          date: batchDate(u),
         }));
         const group = await createAudioBatch(payload);
         await markItemsQueued(uploaded.map(u => u.id), group.groupId);
@@ -601,6 +819,19 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
   }, [connState]);
 
+  // 一键校准设备时间（BLE 真实操作，连接时已自动调用一次；时间校准页手动重发）。
+  const syncTime = useCallback(async () => {
+    await clientRef.current?.syncTime();
+  }, []);
+
+  // 解除绑定：仅清本地配对关系 + 断开，不发 BLE&RESET（不格式化设备、不删已下载录音），
+  // 符合原型「解除后已下载到手机的录音不会被删除」。设备被别的密钥锁住时另走 clearPairing。
+  const forgetDevice = useCallback(async () => {
+    await clearPairedDevice();
+    setHasPaired(false);
+    await disconnect();
+  }, [disconnect]);
+
   const factoryReset = useCallback(async () => {
     await clientRef.current?.factoryReset().catch(() => undefined);
     await clearPairedDevice();
@@ -619,6 +850,11 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     recording,
     syncing,
     syncProgress,
+    wifiPhase,
+    wifiSteps,
+    wifiProgress,
+    wifiCred,
+    wifiSummary,
     deviceFiles,
     inbox,
     processingIds,
@@ -633,6 +869,14 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     disconnect,
     syncNow,
     stopSync,
+    listPendingDeviceFiles,
+    openHotspot,
+    closeHotspot,
+    getHotspotInfo,
+    startWifiTransfer,
+    continueWifiAfterManualJoin,
+    cancelWifiTransfer,
+    resetWifiTransfer,
     refreshDeviceFiles,
     processInboxItem,
     processItems: uploadAndSubmit,
@@ -644,6 +888,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     stopRecording,
     refreshStatus,
     refreshInbox,
+    syncTime,
+    forgetDevice,
     factoryReset,
     clearError: () => setError(null),
   };
