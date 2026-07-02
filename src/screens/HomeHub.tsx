@@ -145,7 +145,7 @@ function fragmentToCard(f: MemoryFragment): MemoryCardModel {
  */
 export function HomeHub() {
   const {openDrawer} = useAppDrawer();
-  const {isGuest, selectedDevice} = useAuth();
+  const {isGuest} = useAuth();
   const gate = useWriteGate();
   const nav = useNav();
   const [memories, setMemories] = useState<MemoryCardModel[]>([]);
@@ -153,14 +153,9 @@ export function HomeHub() {
   const [query, setQuery] = useState('');
   const searching = query.trim().length > 0;
 
-  // 记忆碎片信息流：拉取 /app/memory/fragments/search（按时间倒序）；无设备 / 失败 / 空 → 回退 mock。
+  // 记忆碎片信息流：拉取 /app/memory/fragments/search（按时间倒序）；失败 / 空 → 回退 mock。
   useEffect(() => {
     let alive = true;
-    if (!selectedDevice) {
-      setMemories(DEMO_MEMORIES);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     searchMemoryFragments({page: 1, pageSize: 30})
       .then(res => {
@@ -173,7 +168,7 @@ export function HomeHub() {
     return () => {
       alive = false;
     };
-  }, [selectedDevice?.subDomain]);
+  }, []);
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
