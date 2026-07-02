@@ -20,20 +20,9 @@ import {Check, ChevronRight, Rocket} from 'lucide-react-native';
 import {useMr20} from '../../hooks/useMr20';
 import type {Mr20File} from '../../native/mr20/Mr20Client';
 import {fileEpoch} from '../../services/mr20Ingest';
-import {SubHeader, Toggle, HW} from './parts';
+import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../../services/mediaFormat';
+import {SubHeader, IosAlert, HW} from './parts';
 import {TransferBadge} from './TransferBadge';
-
-function fmtHuman(total: number): string {
-  const s = Math.max(0, Math.round(total));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h} 小时 ${m} 分` : `${m} 分钟`;
-}
-
-function fmtMB(bytes: number): string {
-  const mb = (bytes || 0) / (1024 * 1024);
-  return mb >= 100 ? `${Math.round(mb)}MB` : `${mb.toFixed(1)}MB`;
-}
 
 const keyOf = (f: Mr20File) => `${f.dir}/${f.fname}`;
 const stripMp3 = (n: string) => n.replace(/\.mp3$/i, '');
@@ -44,6 +33,7 @@ const byTimeDesc = (a: Mr20File, b: Mr20File) =>
 export function DeviceFiles({onBack}: {onBack: () => void}) {
   const {
     connState,
+    connectedDevice,
     listPendingDeviceFiles,
     startWifiTransfer,
     syncSelected,
@@ -53,7 +43,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openDir, setOpenDir] = useState<string | null>(null); // null=文件夹一级，否则=某天二级
-  const [useWifi, setUseWifi] = useState(false); // 默认蓝牙；开则走 WiFi 快传
+  const [wifiAsk, setWifiAsk] = useState(false); // 「切换 WiFi 快传」确认弹窗
 
   useEffect(() => {
     let alive = true;
@@ -131,17 +121,22 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     [selected],
   );
 
+  // 默认走蓝牙一键上传（逐文件，无需连热点）。
   const start = useCallback(() => {
     if (!selectedFiles.length) {
       return;
     }
-    // 用户选择：WiFi 快传(需连热点，快 10×) 或 蓝牙(逐文件，慢但无需连热点)。
-    if (useWifi) {
-      startWifiTransfer(selectedFiles).catch(() => undefined);
-    } else {
-      syncSelected(selectedFiles).catch(() => undefined);
+    syncSelected(selectedFiles).catch(() => undefined);
+  }, [selectedFiles, syncSelected]);
+
+  // 手动切到 WiFi 快传：确认后让手机临时加入设备热点高速直传。
+  const confirmWifi = useCallback(() => {
+    setWifiAsk(false);
+    if (!selectedFiles.length) {
+      return;
     }
-  }, [selectedFiles, useWifi, startWifiTransfer, syncSelected]);
+    startWifiTransfer(selectedFiles).catch(() => undefined);
+  }, [selectedFiles, startWifiTransfer]);
 
   return (
     <View style={st.root}>
@@ -251,32 +246,43 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
         )}
       </ScrollView>
 
-      {/* 底部：传输方式选择 + 同步按钮 */}
+      {/* 底部：默认蓝牙一键上传，下方「切换 WiFi 快传」次要链接 */}
       {connState === 'connected' && files.length > 0 ? (
         <View style={st.footer}>
-          <View style={st.optRow}>
-            <View style={st.flex1}>
-              <View style={st.optTitleRow}>
-                <Rocket size={15} color={useWifi ? HW.blue : HW.textTertiary} />
-                <Text style={st.optTitle}>WiFi 快传</Text>
-              </View>
-              <Text style={st.optSub}>
-                {useWifi ? '连设备热点高速直传，比蓝牙快 10×' : '关：走蓝牙逐文件传，慢但无需连热点'}
-              </Text>
-            </View>
-            <Toggle on={useWifi} onToggle={() => setUseWifi(v => !v)} />
-          </View>
           <TouchableOpacity
             style={[st.startBtn, selectedFiles.length === 0 && st.startBtnDisabled]}
             disabled={selectedFiles.length === 0}
             onPress={start}>
             <Text style={st.startBtnText}>
-              {useWifi ? '开始快传' : '同步选中'}
+              蓝牙上传
               {selectedFiles.length ? `（${selectedFiles.length} 个 · ${fmtMB(selectedBytes)}）` : ''}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={st.wifiLink}
+            disabled={selectedFiles.length === 0}
+            hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+            onPress={() => setWifiAsk(true)}>
+            <Rocket size={14} color={selectedFiles.length === 0 ? HW.textTertiary : HW.blue} />
+            <Text
+              style={[st.wifiLinkText, selectedFiles.length === 0 && {color: HW.textTertiary}]}>
+              切换 WiFi 快传，比蓝牙快 10× →
             </Text>
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {/* 切到 WiFi 快传前的确认（复用 iOS 风弹窗）：加入设备热点高速直传 */}
+      <IosAlert
+        visible={wifiAsk}
+        onClose={() => setWifiAsk(false)}
+        title={`“iMemory”想加入无线局域网“${connectedDevice?.name || 'MR20'}”吗？`}
+        message="加入设备热点后可高速直传选中的录音，比蓝牙快约 10 倍。传输结束会自动断开热点。"
+        buttons={[
+          {text: '取消', onPress: () => setWifiAsk(false)},
+          {text: '加入', bold: true, onPress: confirmWifi},
+        ]}
+      />
 
       {/* 非阻塞传输浮标：可点开看进度/取消，其余时间不挡操作 */}
       <TransferBadge />
@@ -308,11 +314,9 @@ const st = StyleSheet.create({
   fileMeta: {fontSize: 12, color: HW.textSub},
 
   footer: {position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 12, backgroundColor: 'rgba(249,249,251,0.96)', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HW.divider},
-  optRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12},
-  optTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2},
-  optTitle: {fontSize: 15, fontWeight: '700', color: HW.textMain},
-  optSub: {fontSize: 12, color: HW.textSub, lineHeight: 16},
   startBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 16, backgroundColor: HW.blue},
   startBtnDisabled: {backgroundColor: HW.textTertiary},
   startBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  wifiLink: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 12},
+  wifiLinkText: {fontSize: 14, color: HW.blue, fontWeight: '600'},
 });

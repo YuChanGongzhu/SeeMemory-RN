@@ -16,6 +16,8 @@ import {mr20FileRelPath} from './mr20Sync';
 /** 设备热点固定网关与快传端口（见 MR20通信协议）。 */
 export const DEVICE_WIFI_HOST = '192.168.200.1';
 export const DEVICE_WIFI_PORT = 8475;
+/** 设备热点默认密码（协议/测试报告：GJJY_DEV&WIFI&SSID&12345678）。设备未回密码时兜底用。 */
+export const DEVICE_WIFI_DEFAULT_PWD = '12345678';
 
 /** 连接阶段步骤，用于 UI「连接中」清单逐步打勾。 */
 export type WifiConnectStep = 'open' | 'join' | 'reachable';
@@ -55,7 +57,10 @@ export async function connectWifi(
   await client.openWifi();
   onStep?.('open', 'done');
 
-  const {ssid, pwd} = await client.getWifiCredentials();
+  const cred = await client.getWifiCredentials();
+  const ssid = cred.ssid;
+  // 设备偶发不回密码时，回退到协议默认密码 12345678，避免入网因空密码失败。
+  const pwd = cred.pwd || DEVICE_WIFI_DEFAULT_PWD;
   if (!ssid) {
     onStep?.('join', 'failed');
     throw new Error('未取到设备热点信息');
@@ -144,6 +149,7 @@ export async function wifiSyncFiles(
         dir: file.dir,
         fname: file.fname,
         seconds: file.seconds,
+        sizeBytes: file.size,
       });
       if (deleteAfter) {
         await client.deleteFile(file.dir, file.fname).catch(() => undefined);

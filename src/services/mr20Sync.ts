@@ -181,6 +181,7 @@ export async function syncFiles(
         dir: file.dir,
         fname: file.fname,
         seconds: file.seconds,
+        sizeBytes: file.size,
       });
       if (deleteAfter) {
         await client.deleteFile(file.dir, file.fname).catch(() => undefined);

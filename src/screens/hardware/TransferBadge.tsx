@@ -14,12 +14,47 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {AlertCircle, CheckCircle2, ChevronUp, Rocket, X} from 'lucide-react-native';
+import {AlertCircle, Check, CheckCircle2, ChevronUp, Rocket, X} from 'lucide-react-native';
 import {ProgressBar} from '../../ui/kit';
 import {useMr20} from '../../hooks/useMr20';
+import type {WifiConnectStep, WifiStepState} from '../../services/mr20WifiSync';
 import {HW} from './parts';
 
 const stripMp3 = (n: string) => n.replace(/\.mp3$/i, '');
+
+const WIFI_STEP_LABEL: Record<WifiConnectStep, string> = {
+  open: '开启设备热点',
+  join: '加入热点网络',
+  reachable: '建立高速连接',
+};
+const WIFI_STEP_ORDER: WifiConnectStep[] = ['open', 'join', 'reachable'];
+
+/** 连接热点分步清单（对齐原型的网络状态展示）。 */
+function WifiSteps({steps}: {steps: Record<WifiConnectStep, WifiStepState>}) {
+  return (
+    <View style={st.steps}>
+      {WIFI_STEP_ORDER.map(k => {
+        const s = steps[k];
+        const color =
+          s === 'done' ? HW.green : s === 'failed' ? HW.red : s === 'active' ? HW.blue : HW.textTertiary;
+        return (
+          <View key={k} style={st.stepRow}>
+            <View style={[st.stepDot, {borderColor: color, backgroundColor: s === 'done' ? HW.green : 'transparent'}]}>
+              {s === 'done' ? (
+                <Check size={10} color="#fff" strokeWidth={3} />
+              ) : s === 'active' ? (
+                <ActivityIndicator size="small" color={HW.blue} />
+              ) : null}
+            </View>
+            <Text style={[st.stepText, {color: s === 'pending' ? HW.textSub : HW.textMain}]}>
+              {WIFI_STEP_LABEL[k]}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
 
 export function TransferBadge() {
   const {
@@ -27,6 +62,7 @@ export function TransferBadge() {
     syncProgress,
     stopSync,
     wifiPhase,
+    wifiSteps,
     wifiProgress,
     wifiSummary,
     wifiCred,
@@ -95,19 +131,40 @@ export function TransferBadge() {
             </TouchableOpacity>
           </View>
 
-          {busy && prog?.current ? (
+          {kind === 'connecting' ? <WifiSteps steps={wifiSteps} /> : null}
+
+          {busy && prog ? (
             <>
-              <Text style={st.file} numberOfLines={1}>
-                {stripMp3(prog.current.fname)}
-              </Text>
+              {/* 总进度：X/Y 文件 */}
+              <View style={st.overallRow}>
+                <Text style={st.overallLabel}>总进度</Text>
+                <Text style={st.overallCount}>
+                  {prog.completed}/{prog.total}
+                </Text>
+              </View>
               <View style={st.progressWrap}>
                 <ProgressBar
-                  value={prog.current.received}
-                  total={prog.current.size}
+                  value={prog.completed}
+                  total={prog.total || 1}
                   color={HW.blue}
                   height={6}
                 />
               </View>
+              {prog.current ? (
+                <>
+                  <Text style={st.file} numberOfLines={1}>
+                    {stripMp3(prog.current.fname)}
+                  </Text>
+                  <View style={st.progressWrap}>
+                    <ProgressBar
+                      value={prog.current.received}
+                      total={prog.current.size}
+                      color={HW.blue}
+                      height={6}
+                    />
+                  </View>
+                </>
+              ) : null}
             </>
           ) : null}
 
@@ -184,6 +241,13 @@ const st = StyleSheet.create({
   hit: {top: 8, bottom: 8, left: 8, right: 8},
   file: {fontSize: 13, color: HW.textSub, marginTop: 10},
   progressWrap: {marginTop: 8},
+  overallRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12},
+  overallLabel: {fontSize: 13, color: HW.textSub, fontWeight: '600'},
+  overallCount: {fontSize: 13, color: HW.textMain, fontWeight: '700'},
+  steps: {marginTop: 12, gap: 10},
+  stepRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  stepDot: {width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center'},
+  stepText: {fontSize: 13, fontWeight: '500'},
   hintText: {fontSize: 13, color: HW.textBody, lineHeight: 19, marginTop: 10},
   actions: {flexDirection: 'row', gap: 10, marginTop: 14},
   ghostBtn: {flex: 1, height: 42, borderRadius: 12, backgroundColor: HW.fill, alignItems: 'center', justifyContent: 'center'},

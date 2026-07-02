@@ -77,6 +77,17 @@ function formatFragmentTime(ts?: string): string {
   return `${datePart.replace(/-/g, '.')} ${hhmm}`;
 }
 
+/** files[].meta.duration_ms（毫秒）→ 'm:ss'；无效返回 undefined（时间流回落 0:00）。 */
+function durationFromMeta(meta: Record<string, unknown> | null): string | undefined {
+  const raw = meta?.duration_ms;
+  const ms = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (!isFinite(ms) || ms <= 0) {
+    return undefined;
+  }
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** 记忆碎片 → 首页/详情页共用的 MemoryCard 模型。 */
 function fragmentToCard(f: MemoryFragment): MemoryCardModel {
   const files = f.files || [];
@@ -116,6 +127,7 @@ function fragmentToCard(f: MemoryFragment): MemoryCardModel {
       name: `语音记录 ${i + 1}`,
       content: m.description || undefined,
       url: m.url,
+      duration: durationFromMeta(m.meta),
     });
   });
   const timelineRecords = records.sort((a, b) => parseTime(a.time) - parseTime(b.time));

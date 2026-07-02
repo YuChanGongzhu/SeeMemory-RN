@@ -28,6 +28,7 @@ export interface Mr20InboxItem {
   fname: string;
   localPath: string;
   seconds: number;
+  sizeBytes?: number; // 文件大小（字节，来自设备文件列表），仅作展示
   audioUrl?: string; // COS objectUrl（上传后）
   batchGroupId?: string; // 所属后端批处理 groupId
   transcript?: string; // 后端转写文本
@@ -41,6 +42,7 @@ export interface IngestInput {
   dir: string;
   fname: string;
   seconds: number;
+  sizeBytes?: number;
   recMode?: 'call' | 'conversation';
 }
 
@@ -152,6 +154,7 @@ export async function recordSyncedFile(input: IngestInput): Promise<Mr20InboxIte
     fname: input.fname,
     localPath: input.localPath,
     seconds: input.seconds,
+    sizeBytes: input.sizeBytes ?? existing?.sizeBytes,
     audioUrl: existing?.audioUrl,
     batchGroupId: existing?.batchGroupId,
     transcript: existing?.transcript,

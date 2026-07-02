@@ -275,6 +275,12 @@ const toInt = (s: string | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// 保留小数（如剩余空间 MB 带小数位），供需要 KB 级精度的字段用。
+const toNum = (s: string | undefined): number => {
+  const n = parseFloat((s ?? '').trim());
+  return Number.isFinite(n) ? n : 0;
+};
+
 /**
  * 解析设备文本命令帧。入参为去掉传输封装后的 ASCII 字符串，
  * 例如 "GJJY_DEV&SPA&512&8192"。无法识别返回 UNKNOWN。
@@ -322,7 +328,7 @@ export function parseDeviceMessage(rawInput: string): DeviceMessage {
     case 'DISK':
       return {type: 'DISK_ERR'};
     case 'SPA':
-      return {type: 'SPACE', freeMb: toInt(tokens[1]), totalMb: toInt(tokens[2])};
+      return {type: 'SPACE', freeMb: toNum(tokens[1]), totalMb: toNum(tokens[2])};
     case 'BAT':
       return {type: 'BATTERY', rate: toInt(tokens[1])};
     case 'FW':

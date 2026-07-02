@@ -708,6 +708,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           url: u.audioUrl as string,
           fileName: batchFileName(u),
           date: batchDate(u),
+          durationMs: u.seconds > 0 ? Math.round(u.seconds * 1000) : undefined,
         }));
         const group = await createAudioBatch(payload);
         await markItemsQueued(uploaded.map(u => u.id), group.groupId);

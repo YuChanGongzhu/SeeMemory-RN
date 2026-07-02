@@ -20,6 +20,8 @@ export interface AudioBatchInput {
   url: string;
   date: string;
   fileName: string;
+  /** 音频时长（毫秒，设备端已知）。后端优先采用，缺省时回退 ASR 时长。 */
+  durationMs?: number;
 }
 
 export interface BatchGroupResult {
@@ -48,6 +50,7 @@ export interface AudioFileResult {
   fileName: string;
   sizeBytes?: string;
   sizeKb?: string;
+  durationMs?: number;
   recordedAt?: string;
   recordedTime?: string;
   errorMessage?: string | null;

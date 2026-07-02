@@ -24,16 +24,14 @@ import {
   Bookmark,
   BatteryLow,
   Check,
-  CheckCircle2,
   ChevronLeft,
+  ChevronRight,
   Cloud,
   Mic,
   MoreHorizontal,
   Pause,
   Play,
-  Rocket,
   Trash2,
-  Upload,
 } from 'lucide-react-native';
 import {colors, radius, shadow} from '../design/tokens';
 import {GradientBg} from '../ui/Gradient';
@@ -43,10 +41,10 @@ import {useNav} from '../navigation/nav';
 import {useMr20} from '../hooks/useMr20';
 import {useMr20Playback} from '../hooks/useMr20Playback';
 import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
-import {IosAlert, HW, type HwSubPage} from './hardware/parts';
+import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../services/mediaFormat';
+import {IosAlert, SubHeader, HW, type HwSubPage} from './hardware/parts';
 import {DeviceSettings} from './hardware/DeviceSettings';
 import {WifiManage} from './hardware/WifiManage';
-import {WifiTransfer} from './hardware/WifiTransfer';
 import {DeviceFiles} from './hardware/DeviceFiles';
 import {TransferBadge} from './hardware/TransferBadge';
 import {TimeSync} from './hardware/TimeSync';
@@ -69,26 +67,19 @@ function fmtDuration(total: number): string {
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
-function fmtHuman(total: number): string {
-  const s = Math.max(0, Math.round(total));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) {
-    return `${h} 小时 ${m} 分`;
-  }
-  return `${m} 分钟`;
+// 分组 key：本地日期 YYYY-MM-DD。避免跨年同月日（如 2025-06-30 与
+// 2026-06-30）撞进同一组，也用于组间倒序排序。
+function dayKey(ts: number): string {
+  const d = new Date(ts);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
-function dayLabel(ts: number): string {
+// 折叠日期行的标题：对齐原型「2026年6月29日」。
+function dayFull(ts: number): string {
   const d = new Date(ts);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return '今天';
-  }
-  if (d.toDateString() === new Date(now.getTime() - 86400000).toDateString()) {
-    return '昨天';
-  }
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 function clock(ts: number): string {
@@ -96,18 +87,35 @@ function clock(ts: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-const STATUS_LABEL: Record<Mr20InboxItem['status'], string> = {
-  synced: '待处理',
-  uploaded: '已上传',
-  queued: '处理中',
-  done: '已归档',
-  error: '失败',
-};
+// 录音时刻精确到秒（同一分钟内常有多条，用它区分并对应设备文件名）。
+function clockSec(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+// 尚可上传到云端的条目（未入库、未在批处理中）。
+function isUploadable(it: Mr20InboxItem): boolean {
+  return it.status === 'synced' || it.status === 'uploaded' || it.status === 'error';
+}
+
+// RSSI(dBm) → 信号格数 0~3：≥-60 强(3)、≥-75 中(2)、其余弱(1)、无值(0)。
+function rssiLevel(rssi: number | null): number {
+  if (rssi == null) {
+    return 0;
+  }
+  if (rssi >= -60) {
+    return 3;
+  }
+  if (rssi >= -75) {
+    return 2;
+  }
+  return 1;
+}
 
 export function HardwarePage() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
-  const mr = useMr20();
   const {
     connState,
     devices,
@@ -115,7 +123,7 @@ export function HardwarePage() {
     status,
     recording,
     syncing,
-    syncProgress,
+    wifiPhase,
     deviceFiles,
     inbox,
     processingIds,
@@ -125,46 +133,39 @@ export function HardwarePage() {
     connectAndPair,
     disconnect,
     syncNow,
-    stopSync,
     refreshDeviceFiles,
-    processInboxItem,
+    processItems,
     deleteItems,
     refreshStatus,
     clearError,
     forgetDevice,
-  } = mr;
+  } = useMr20();
   const playback = useMr20Playback();
 
   const [subPage, setSubPage] = useState<HwSubPage>('main');
+  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null); // 展开查看某天录音
+  const [uploadSel, setUploadSel] = useState<Set<string>>(new Set()); // 当天录音的批量上传勾选
   const [moreOpen, setMoreOpen] = useState(false);
   const [disconnectAsk, setDisconnectAsk] = useState(false);
   const [unbindAsk, setUnbindAsk] = useState(false);
-  const [alias, setAlias] = useState('MR20 记忆粒');
+  const [alias, setAlias] = useState('');
   const [autoDownload, setAutoDownload] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [pendingName, setPendingName] = useState(''); // 正在连接的设备名（覆盖层展示）
 
   const connected = connState === 'connected';
   const busy = connState === 'scanning' || connState === 'connecting' || connState === 'pairing';
-  const autoTriedRef = useRef<string | null>(null);
   const autoDlRef = useRef(false);
+  // 门控「传输完成自动返回主页」：记录上一拍的传输态，只在真正发生过传输后
+  // 触发一次返回，避免初始 false / 误触发。
+  const bleWasSyncingRef = useRef(false);
+  const wifiWasActiveRef = useRef(false);
 
   // 本地偏好：设备别名 + 自动下载开关。
   useEffect(() => {
     AsyncStorage.getItem(ALIAS_KEY).then(v => v && setAlias(v)).catch(() => undefined);
     AsyncStorage.getItem(AUTODL_KEY).then(v => setAutoDownload(v === '1')).catch(() => undefined);
   }, []);
-
-  // 扫到信号最强的记忆粒就自动配对（原型「一键配对」）。
-  useEffect(() => {
-    if (connState !== 'scanning' || !devices.length) {
-      return;
-    }
-    const best = [...devices].sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999))[0];
-    if (best && autoTriedRef.current !== best.id) {
-      autoTriedRef.current = best.id;
-      connectAndPair(best.id, best.name).catch(() => undefined);
-    }
-  }, [connState, devices, connectAndPair]);
 
   // 离开页面停扫描。
   useEffect(() => () => stopScan(), [stopScan]);
@@ -207,17 +208,53 @@ export function HardwarePage() {
     }
   }, [connected, autoDownload, syncing, deviceFiles, syncNow]);
 
+  // 蓝牙同步完成（syncing true→false）后，若还停在设备文件页且无错误，自动回主页。
+  useEffect(() => {
+    const was = bleWasSyncingRef.current;
+    bleWasSyncingRef.current = syncing;
+    if (was && !syncing && !error && subPage === 'deviceFiles') {
+      setSubPage('main');
+    }
+  }, [syncing, error, subPage]);
+
+  // WiFi 快传完成（wifiPhase→'done'）后，若发起自设备文件页则自动回主页；
+  // 'manual'/'error'/'idle' 不返回（保留手动引导或错误在原页可见）。
+  useEffect(() => {
+    if (wifiPhase === 'connecting' || wifiPhase === 'transferring' || wifiPhase === 'manual') {
+      wifiWasActiveRef.current = true;
+      return;
+    }
+    if (wifiPhase === 'done' && wifiWasActiveRef.current) {
+      wifiWasActiveRef.current = false;
+      if (subPage === 'deviceFiles') {
+        setSubPage('main');
+      }
+    }
+    if (wifiPhase === 'idle' || wifiPhase === 'error') {
+      wifiWasActiveRef.current = false;
+    }
+  }, [wifiPhase, subPage]);
+
   const pair = useCallback(() => {
-    autoTriedRef.current = null;
+    setPendingName('');
     clearError();
     startScan().catch(() => undefined);
   }, [startScan, clearError]);
 
   const cancelPairing = useCallback(() => {
     stopScan();
-    autoTriedRef.current = null;
+    setPendingName('');
     disconnect().catch(() => undefined);
   }, [stopScan, disconnect]);
+
+  // 用户从扫描列表点选某台设备 → 连接并配对（多台时不再自动连最强）。
+  const chooseDevice = useCallback(
+    (dev: {id: string; name: string}) => {
+      setPendingName(dev.name);
+      connectAndPair(dev.id, dev.name).catch(() => undefined);
+    },
+    [connectAndPair],
+  );
 
   const onPlay = useCallback(
     (item: Mr20InboxItem) => {
@@ -252,6 +289,18 @@ export function HardwarePage() {
     AsyncStorage.setItem(ALIAS_KEY, name).catch(() => undefined);
   }, []);
 
+  const toggleUploadSel = useCallback((id: string) => {
+    setUploadSel(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   const toggleAutoDownload = useCallback(() => {
     setAutoDownload(v => {
       const next = !v;
@@ -260,36 +309,151 @@ export function HardwarePage() {
     });
   }, []);
 
-  // 录音按天分组（今天/昨天/更早）。
+  // 录音按天分组（今天/昨天/更早）：按 dayKey 分组避免跨年撞组，
+  // 组间按日期倒序（新的在前）、组内按录音时刻倒序，标题用 dayLabel 展示。
   const groups = useMemo(() => {
     const map = new Map<string, Mr20InboxItem[]>();
     for (const it of inbox) {
-      const label = dayLabel(itemEpoch(it));
-      const arr = map.get(label) ?? [];
+      const key = dayKey(itemEpoch(it));
+      const arr = map.get(key) ?? [];
       arr.push(it);
-      map.set(label, arr);
+      map.set(key, arr);
     }
-    return Array.from(map.entries());
+    return Array.from(map.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, items]) => ({
+        key,
+        items: [...items].sort((a, b) => itemEpoch(b) - itemEpoch(a)),
+      }));
   }, [inbox]);
 
   const battery = status.battery;
   const lowBattery = battery != null && battery <= 20;
   const freeMb = status.spaceFreeMb;
   const totalMb = status.spaceTotalMb;
-  const freeGb = freeMb != null ? Math.round(freeMb / 1024) : null;
+  // 剩余空间按 GB + MB 展示。
+  const freeMbWhole = freeMb != null ? Math.max(0, Math.round(freeMb)) : null;
+  const freeGb = freeMbWhole != null ? Math.floor(freeMbWhole / 1024) : null;
+  const freeMbRem = freeMbWhole != null ? freeMbWhole % 1024 : null;
   const usedRatio = freeMb != null && totalMb ? Math.max(0, Math.min(1, 1 - freeMb / totalMb)) : 0;
   const storageWarn = freeMb != null && totalMb ? freeMb / totalMb < 0.1 : false;
   const deviceName = alias || connectedDevice?.name || 'MR20 记忆粒';
 
+  // 单条录音卡片（主页折叠→当天子页、以及后续复用）。
+  const renderRecCard = (item: Mr20InboxItem) => {
+    const isPlaying = playback.playingId === item.id;
+    const isProcessing = processingIds.includes(item.id);
+    const archived = item.status === 'done';
+    const uploadable = isUploadable(item);
+    const selected = uploadSel.has(item.id);
+    return (
+      <View key={item.id} style={st.recCard}>
+        <TouchableOpacity style={st.recIcon} onPress={() => onPlay(item)}>
+          {isPlaying ? (
+            <Pause size={18} color={HW.blue} fill={HW.blue} />
+          ) : (
+            <Play size={18} color={HW.blue} fill={HW.blue} />
+          )}
+        </TouchableOpacity>
+        <View style={st.flex1}>
+          <Text style={st.recTitle} numberOfLines={1}>
+            {item.transcript?.trim() || `录音 ${clock(itemEpoch(item))}`}
+          </Text>
+          <Text style={st.recMeta}>
+            {clockSec(itemEpoch(item))} · 时长 {fmtHuman(item.seconds)}
+            {item.sizeBytes ? ` · ${fmtMB(item.sizeBytes)}` : ''}
+          </Text>
+        </View>
+        {isProcessing ? (
+          <ActivityIndicator size="small" color={HW.blue} />
+        ) : (
+          <View style={st.recActions}>
+            {archived ? (
+              <View style={st.localTag}>
+                <Check size={15} color={HW.textSub} strokeWidth={3} />
+                <Text style={st.localTagText}>已归档</Text>
+              </View>
+            ) : uploadable ? (
+              <TouchableOpacity
+                style={st.recActionBtn}
+                onPress={() => toggleUploadSel(item.id)}>
+                <View style={[st.checkbox, selected && st.checkboxOn]}>
+                  {selected ? <Check size={13} color="#fff" strokeWidth={3} /> : null}
+                </View>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={st.recActionBtn} onPress={() => confirmDelete(item)}>
+              <Trash2 size={17} color={HW.red} />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   // ---- 子页路由（原型 activeSubPage 状态机） ----
+  // 某天录音子页（原型 date_recordings）：从折叠日期行点进来。
+  if (selectedDayKey) {
+    const group = groups.find(g => g.key === selectedDayKey);
+    const dayItems = group?.items ?? [];
+    const uploadables = dayItems.filter(isUploadable);
+    const selCount = uploadables.filter(i => uploadSel.has(i.id)).length;
+    const allSel = uploadables.length > 0 && selCount === uploadables.length;
+    const closeDay = () => {
+      setUploadSel(new Set());
+      setSelectedDayKey(null);
+    };
+    const toggleAllUpload = () =>
+      setUploadSel(allSel ? new Set() : new Set(uploadables.map(i => i.id)));
+    const uploadSelected = () => {
+      const chosen = uploadables.filter(i => uploadSel.has(i.id));
+      if (!chosen.length) {
+        return;
+      }
+      setUploadSel(new Set());
+      // 一次性上传并提交为同一个批次（/app/audio/batch）。
+      processItems(chosen).catch(() => undefined);
+    };
+    return (
+      <View style={st.root}>
+        <SubHeader
+          title={group ? dayFull(itemEpoch(group.items[0])) : '录音'}
+          onBack={closeDay}
+          right={
+            uploadables.length ? (
+              <TouchableOpacity
+                onPress={toggleAllUpload}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                <Text style={st.selectAllText}>{allSel ? '取消全选' : '全选'}</Text>
+              </TouchableOpacity>
+            ) : undefined
+          }
+        />
+        <ScrollView
+          contentContainerStyle={[st.pairedBody, selCount > 0 && st.pairedBodyPad]}
+          showsVerticalScrollIndicator={false}>
+          {dayItems.length ? (
+            <View style={{gap: 12}}>{dayItems.map(renderRecCard)}</View>
+          ) : (
+            <Text style={st.empty}>这天的录音已清空。</Text>
+          )}
+        </ScrollView>
+        {selCount > 0 ? (
+          <View style={st.footer}>
+            <TouchableOpacity style={st.startBtn} onPress={uploadSelected}>
+              <Text style={st.startBtnText}>上传选中（{selCount} 段）</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        <TransferBadge />
+      </View>
+    );
+  }
   if (subPage === 'settings') {
     return <DeviceSettings onBack={() => setSubPage('main')} onNavigate={setSubPage} />;
   }
   if (subPage === 'wifi') {
     return <WifiManage onBack={() => setSubPage('settings')} />;
-  }
-  if (subPage === 'wifiTransfer') {
-    return <WifiTransfer onBack={() => setSubPage('main')} />;
   }
   if (subPage === 'deviceFiles') {
     return <DeviceFiles onBack={() => setSubPage('main')} />;
@@ -413,7 +577,7 @@ export function HardwarePage() {
                     <>
                       <Text style={st.statBigUnit}>剩余 </Text>
                       {freeGb}
-                      <Text style={st.statBigUnit}>GB</Text>
+                      <Text style={st.statBigUnit}>GB {freeMbRem}MB</Text>
                     </>
                   ) : (
                     '—'
@@ -431,95 +595,32 @@ export function HardwarePage() {
             </View>
           </View>
 
-          {/* WiFi 快传入口：大文件走热点高速直传，比蓝牙快 10× */}
-          <TouchableOpacity
-            style={st.wifiCta}
-            activeOpacity={0.85}
-            onPress={() => setSubPage('wifiTransfer')}>
-            <View style={st.wifiCtaIcon}>
-              <Rocket size={18} color={HW.blue} />
-            </View>
-            <View style={{flex: 1}}>
-              <Text style={st.wifiCtaTitle}>WiFi 快传</Text>
-              <Text style={st.wifiCtaSub}>
-                {deviceFiles && deviceFiles.pending > 0
-                  ? `${deviceFiles.pending} 个待传录音 · 热点直传更快`
-                  : '长录音热点直传，比蓝牙快 10 倍'}
-              </Text>
-            </View>
-            <ChevronLeft size={20} color={HW.textTertiary} style={{transform: [{rotate: '180deg'}]}} />
-          </TouchableOpacity>
-
           {/* 录音列表 */}
           <View style={st.listHead}>
             <Text style={st.listTitle}>我的录音</Text>
-            <TouchableOpacity
-              style={[st.downloadAll, syncing && st.downloadAllSyncing]}
-              onPress={() => (syncing ? stopSync() : setSubPage('deviceFiles'))}>
-              <Text style={[st.downloadAllText, syncing && st.downloadAllSyncingText]}>
-                {syncing
-                  ? syncProgress && syncProgress.total > 0
-                    ? `暂停同步 ${syncProgress.completed}/${syncProgress.total}`
-                    : '暂停同步'
-                  : '查看全部'}
-              </Text>
+            <TouchableOpacity style={st.downloadAll} onPress={() => setSubPage('deviceFiles')}>
+              <Text style={st.downloadAllText}>设备文件</Text>
             </TouchableOpacity>
           </View>
 
           {inbox.length === 0 ? (
             <Text style={st.empty}>暂无录音。点「查看全部」从记忆粒同步。</Text>
           ) : (
-            groups.map(([label, items]) => (
-              <View key={label} style={{marginBottom: 8}}>
-                <Text style={st.groupLabel}>{label}</Text>
-                <View style={{gap: 12}}>
-                  {items.map(item => {
-                    const isPlaying = playback.playingId === item.id;
-                    const isProcessing = processingIds.includes(item.id);
-                    const archived = item.status === 'done';
-                    const uploadable = item.status === 'synced' || item.status === 'uploaded' || item.status === 'error';
-                    return (
-                      <View key={item.id} style={st.recCard}>
-                        <TouchableOpacity style={st.recIcon} onPress={() => onPlay(item)}>
-                          {isPlaying ? (
-                            <Pause size={18} color={HW.blue} fill={HW.blue} />
-                          ) : archived ? (
-                            <CheckCircle2 size={20} color={HW.textSub} />
-                          ) : (
-                            <Cloud size={20} color={HW.blue} />
-                          )}
-                        </TouchableOpacity>
-                        <View style={{flex: 1}}>
-                          <Text style={st.recTitle} numberOfLines={1}>
-                            {item.transcript?.trim() || `录音 ${clock(itemEpoch(item))}`}
-                          </Text>
-                          <Text style={st.recMeta}>时长 {fmtHuman(item.seconds)}</Text>
-                        </View>
-                        {isProcessing ? (
-                          <ActivityIndicator size="small" color={HW.blue} />
-                        ) : archived ? (
-                          <View style={st.localTag}>
-                            <Check size={15} color={HW.textSub} strokeWidth={3} />
-                            <Text style={st.localTagText}>已归档</Text>
-                          </View>
-                        ) : (
-                          <View style={st.recActions}>
-                            {uploadable ? (
-                              <TouchableOpacity style={st.recActionBtn} onPress={() => processInboxItem(item)}>
-                                <Upload size={17} color={HW.blue} />
-                              </TouchableOpacity>
-                            ) : null}
-                            <TouchableOpacity style={st.recActionBtn} onPress={() => confirmDelete(item)}>
-                              <Trash2 size={17} color={HW.red} />
-                            </TouchableOpacity>
-                          </View>
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-              </View>
-            ))
+            <View style={{gap: 12}}>
+              {groups.map(group => (
+                <TouchableOpacity
+                  key={group.key}
+                  activeOpacity={0.7}
+                  style={st.dateRow}
+                  onPress={() => setSelectedDayKey(group.key)}>
+                  <Text style={st.dateRowTitle}>{dayFull(itemEpoch(group.items[0]))}</Text>
+                  <View style={st.dateRowRight}>
+                    <Text style={st.dateRowCount}>共 {group.items.length} 条</Text>
+                    <ChevronRight size={18} color={HW.textTertiary} />
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
 
           {/* 自动下载开关 */}
@@ -553,8 +654,46 @@ export function HardwarePage() {
               <View style={st.scanOrb}>
                 <Bluetooth size={48} color={HW.blue} />
               </View>
-              <Text style={st.overlayTitle}>正在寻找附近的录音设备...</Text>
-              <Text style={st.overlaySub}>请确保设备已开机，且靠近手机{'\n'}（建议 1 米内）</Text>
+              <Text style={st.overlayTitle}>
+                {devices.length ? '选择要连接的设备' : '正在寻找附近的录音设备...'}
+              </Text>
+              <Text style={st.overlaySub}>请确保设备已开机，且靠近手机（建议 1 米内）</Text>
+              {devices.length ? (
+                <View style={st.devList}>
+                  {[...devices]
+                    .sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999))
+                    .map(d => (
+                      <TouchableOpacity
+                        key={d.id}
+                        style={st.devRow}
+                        activeOpacity={0.7}
+                        onPress={() => chooseDevice(d)}>
+                        <Bluetooth size={18} color={HW.blue} />
+                        <Text style={st.devRowName} numberOfLines={1}>
+                          {d.name || d.id}
+                        </Text>
+                        <View style={st.sig}>
+                          {[0, 1, 2].map(i => (
+                            <View
+                              key={i}
+                              style={[
+                                st.sigBar,
+                                {height: 5 + i * 4},
+                                i < rssiLevel(d.rssi) ? st.sigOn : st.sigOff,
+                              ]}
+                            />
+                          ))}
+                        </View>
+                        {d.rssi != null ? (
+                          <Text style={st.devRowRssi}>{d.rssi} dBm</Text>
+                        ) : null}
+                        <ChevronRight size={18} color={HW.textTertiary} />
+                      </TouchableOpacity>
+                    ))}
+                </View>
+              ) : (
+                <ActivityIndicator size="small" color={HW.blue} style={{marginTop: 16}} />
+              )}
               <TouchableOpacity style={st.cancelBtn} onPress={cancelPairing}>
                 <Text style={st.cancelText}>取消</Text>
               </TouchableOpacity>
@@ -562,7 +701,9 @@ export function HardwarePage() {
           ) : (
             <>
               <ActivityIndicator size="large" color={HW.textMain} style={{marginBottom: 24}} />
-              <Text style={st.overlayTitle}>正在连接并配置设备...</Text>
+              <Text style={st.overlayTitle}>
+                {pendingName ? `正在连接 ${pendingName}…` : '正在连接并配置设备...'}
+              </Text>
               <Text style={st.overlaySub}>请勿关闭页面或远离设备</Text>
               <TouchableOpacity style={st.cancelBtn} onPress={cancelPairing}>
                 <Text style={st.cancelText}>取消</Text>
@@ -657,6 +798,7 @@ export function HardwarePage() {
 
 const st = StyleSheet.create({
   root: {flex: 1, backgroundColor: HW.pageBg},
+  flex1: {flex: 1},
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -685,6 +827,13 @@ const st = StyleSheet.create({
 
   // 已配对
   pairedBody: {padding: 20},
+  pairedBodyPad: {paddingBottom: 110},
+  selectAllText: {fontSize: 15, color: HW.blue, fontWeight: '600'},
+  checkbox: {width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: HW.textTertiary, alignItems: 'center', justifyContent: 'center'},
+  checkboxOn: {backgroundColor: HW.blue, borderColor: HW.blue},
+  footer: {position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 12, backgroundColor: 'rgba(249,249,251,0.96)', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HW.divider},
+  startBtn: {height: 52, borderRadius: 16, backgroundColor: HW.blue, alignItems: 'center', justifyContent: 'center'},
+  startBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
   dashCard: {borderRadius: radius.bigCard, padding: 20, marginBottom: 24, overflow: 'hidden', backgroundColor: colors.darkCard, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.08)'},
   dashRow1: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16},
   devIconWrap: {width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center'},
@@ -707,18 +856,15 @@ const st = StyleSheet.create({
   storageBar: {height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.1)', marginBottom: 6, overflow: 'hidden'},
   storageFill: {height: '100%', borderRadius: 2},
 
-  wifiCta: {flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: HW.card, borderRadius: 20, padding: 16, marginBottom: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder, ...shadow.soft},
-  wifiCtaIcon: {width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0F8FF', alignItems: 'center', justifyContent: 'center'},
-  wifiCtaTitle: {fontSize: 16, fontWeight: '700', color: HW.textMain, marginBottom: 2},
-  wifiCtaSub: {fontSize: 12, color: HW.textSub},
+  dateRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: HW.card, borderRadius: 20, paddingHorizontal: 20, paddingVertical: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder, ...shadow.soft},
+  dateRowTitle: {fontSize: 16, fontWeight: '600', color: HW.textMain},
+  dateRowRight: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  dateRowCount: {fontSize: 14, color: HW.textSub, fontWeight: '500'},
   listHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16},
   listTitle: {fontSize: 19, fontWeight: '700', color: HW.textMain, letterSpacing: -0.4},
   downloadAll: {backgroundColor: 'rgba(10,132,255,0.08)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16},
   downloadAllText: {fontSize: 14, color: HW.blue, fontWeight: '600'},
-  downloadAllSyncing: {backgroundColor: 'rgba(255,59,48,0.1)'},
-  downloadAllSyncingText: {color: HW.red},
   empty: {fontSize: 14, color: HW.textSub, textAlign: 'center', paddingVertical: 32},
-  groupLabel: {fontSize: 15, fontWeight: '700', color: HW.textMain, marginBottom: 12, paddingHorizontal: 4},
   recCard: {flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: HW.card, borderRadius: 20, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder, ...shadow.soft},
   recIcon: {width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0F8FF', alignItems: 'center', justifyContent: 'center'},
   recTitle: {fontSize: 16, fontWeight: '600', color: HW.textMain, marginBottom: 2, letterSpacing: -0.2},
@@ -739,6 +885,14 @@ const st = StyleSheet.create({
   successOrb: {width: 80, height: 80, borderRadius: 40, backgroundColor: HW.green, alignItems: 'center', justifyContent: 'center', marginBottom: 32},
   overlayTitle: {fontSize: 18, fontWeight: '600', color: HW.textMain, marginBottom: 12, textAlign: 'center'},
   overlaySub: {fontSize: 14, color: HW.textSub, textAlign: 'center', lineHeight: 21},
+  devList: {alignSelf: 'stretch', marginTop: 20, gap: 10},
+  devRow: {flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: HW.card, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
+  devRowName: {flex: 1, fontSize: 15, fontWeight: '600', color: HW.textMain},
+  sig: {flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 13},
+  sigBar: {width: 3, borderRadius: 1},
+  sigOn: {backgroundColor: HW.blue},
+  sigOff: {backgroundColor: HW.textTertiary},
+  devRowRssi: {fontSize: 12, color: HW.textSub},
   cancelBtn: {marginTop: 28, paddingHorizontal: 32, paddingVertical: 12, borderRadius: radius.pill, backgroundColor: HW.fill},
   cancelText: {color: HW.textMain, fontSize: 15, fontWeight: '600'},
 
