@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useTheme} from '../theme/ThemeProvider';
-import {GlassesIcon, RingIcon, ServerIcon} from './Icons';
+import {GlassesIcon, ServerIcon} from './Icons';
 
 type DevicesOverlayProps = {
   visible: boolean;
@@ -70,43 +70,6 @@ export function DevicesOverlay({visible, onClose, onOpenNas}: DevicesOverlayProp
               <View style={styles.statCell}>
                 <Text style={styles.statCellLabel}>固件</Text>
                 <Text style={styles.statCellVal}>最新</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Ring card */}
-          <View style={styles.deviceCard}>
-            <View style={styles.deviceCardHeader}>
-              <View style={[styles.deviceIconWrap, {backgroundColor: '#E8EEDD'}]}>
-                <RingIcon size={26} color="#7FA868" />
-              </View>
-              <View style={{flex: 1}}>
-                <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
-                  <Text style={styles.deviceName}>拾光戒指</Text>
-                  <Text style={styles.deviceModel}>Halo R1</Text>
-                </View>
-                <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, {backgroundColor: '#7FA868'}]} />
-                  <Text style={styles.statusText}>蓝牙已连接 · 佩戴中</Text>
-                </View>
-              </View>
-              <View style={styles.batteryBlock}>
-                <Text style={styles.batteryNum}>84%</Text>
-                <Text style={styles.batteryEst}>约 2 天</Text>
-              </View>
-            </View>
-            <View style={styles.statsGrid}>
-              <View style={styles.statCell}>
-                <Text style={styles.statCellLabel}>今日收藏</Text>
-                <Text style={styles.statCellVal}>5 次</Text>
-              </View>
-              <View style={styles.statCell}>
-                <Text style={styles.statCellLabel}>静息心率</Text>
-                <Text style={styles.statCellVal}>68</Text>
-              </View>
-              <View style={styles.statCell}>
-                <Text style={styles.statCellLabel}>手势</Text>
-                <Text style={styles.statCellVal}>开</Text>
               </View>
             </View>
           </View>

@@ -39,7 +39,7 @@ import {BottomSheet} from '../ui/BottomSheet';
 import {images} from '../design/assets';
 import {useNav} from '../navigation/nav';
 import {useMr20} from '../hooks/useMr20';
-import {useMr20Playback} from '../hooks/useMr20Playback';
+import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
 import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../services/mediaFormat';
 import {IosAlert, SubHeader, HW, type HwSubPage} from './hardware/parts';
@@ -140,7 +140,7 @@ export function HardwarePage() {
     clearError,
     forgetDevice,
   } = useMr20();
-  const playback = useMr20Playback();
+  const playback = useAudioPlayback();
 
   const [subPage, setSubPage] = useState<HwSubPage>('main');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null); // 展开查看某天录音

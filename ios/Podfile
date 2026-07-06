@@ -57,16 +57,6 @@ target 'RingMemoryApp' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  # BCLRingSDK transitive dependencies. The SDK itself is linked directly from
-  # the app target to match the SeeMemory integration path.
-  pod 'Foil', '~> 5.1.2'
-  pod 'NordicDFU'
-  pod 'RxSwift', '~> 6.9.0'
-  pod 'RxRelay', '~> 6.9.0'
-  pod 'RxCocoa', '~> 6.9.0'
-  pod 'SwiftDate'
-  pod 'SwiftyBeaver', '1.9.5'
-
   # Rokid CXR-L SDK integration.
   # The Rokid SDK (RGCxrClient/RGCoreKit) ships device-only framework slices and
   # cannot build for the iOS Simulator. Set RN_SIMULATOR=1 before `pod install`
@@ -86,19 +76,6 @@ target 'RingMemoryApp' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
-
-    # Keep the SDK's Swift dependency graph aligned with the binary interface.
-    bcl_deps = %w[Foil NordicDFU RxSwift RxRelay RxCocoa SwiftDate SwiftyBeaver ZIPFoundation]
-    installer.pods_project.targets.each do |target|
-      next unless bcl_deps.include?(target.name)
-
-      target.build_configurations.each do |build_config|
-        build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-        build_config.build_settings['DEFINES_MODULE'] = 'YES'
-        build_config.build_settings.delete('BUILD_LIBRARY_FOR_DISTRIBUTION')
-      end
-    end
-
   end
 end
 

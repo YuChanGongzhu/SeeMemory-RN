@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {ChatMessage} from '../types/chat';
 
-// 聊天历史按「记忆盒子」(subDomain) 分别持久化，互不串台。
+// 聊天历史按 sessionId 持久化（当前为「登录用户单会话」）。key 通用，调用方决定粒度。
 const PREFIX = '@ringmemory:chat_history:';
 const MAX_MESSAGES = 200;
 
@@ -37,6 +37,9 @@ export async function saveChatHistory(boxId: string, messages: ChatMessage[]): P
         const out: ChatMessage = {id: m.id, role: m.role, text: m.text};
         if (m.runId) out.runId = m.runId;
         if (m.debugSource) out.debugSource = m.debugSource;
+        // 语音消息的本地音频路径与时长：持久化后重开仍可回听（文件存在时）。
+        if (m.audioPath) out.audioPath = m.audioPath;
+        if (m.audioDurationMs) out.audioDurationMs = m.audioDurationMs;
         return out;
       })
       .slice(-MAX_MESSAGES);
@@ -54,6 +57,19 @@ export async function clearChatHistory(boxId: string): Promise<void> {
   if (!boxId) return;
   try {
     await AsyncStorage.removeItem(keyFor(boxId));
+  } catch {
+    // ignore
+  }
+}
+
+// 清除所有聊天历史（登出时调用，避免换账号后看到上一个用户的会话）。
+export async function clearAllChatHistory(): Promise<void> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const mine = keys.filter(k => k.startsWith(PREFIX));
+    if (mine.length) {
+      await AsyncStorage.multiRemove(mine);
+    }
   } catch {
     // ignore
   }

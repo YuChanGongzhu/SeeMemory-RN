@@ -2,6 +2,7 @@ import React from 'react';
 import {View, Text, Image, TouchableOpacity, StyleSheet} from 'react-native';
 import {Play, Pause, FileText} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
+import {useImagePreview} from '../hooks/useImagePreview';
 import type {TimelineRecord} from '../types/memory';
 
 /** 秒 → 'm:ss'；无效/为空返回 ''。 */
@@ -32,6 +33,7 @@ export function TimelineNode({
   playbackTime?: number;
   playbackDuration?: number;
 }) {
+  const {preview} = useImagePreview();
   const isAudio = !!node.audio || node.type === 'audio';
   const audioName = node.audio?.name || node.name || '语音记录';
   const canPlay = isAudio && !!node.url && !!onTogglePlay;
@@ -91,7 +93,9 @@ export function TimelineNode({
       {images.length > 0 ? (
         <View style={{gap: 8}}>
           {images.map((u, i) => (
-            <Image key={i} source={{uri: u}} style={styles.image} resizeMode="cover" />
+            <TouchableOpacity key={i} activeOpacity={0.9} onPress={() => preview(u)}>
+              <Image source={{uri: u}} style={styles.image} resizeMode="cover" />
+            </TouchableOpacity>
           ))}
         </View>
       ) : null}

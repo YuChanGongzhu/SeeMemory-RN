@@ -1,6 +1,11 @@
 import {useState, useCallback} from 'react';
 import {uploadAudioSegment} from '../services/api';
-import type {AudioSegment} from '../types';
+
+interface AudioSegment {
+  filePath: string;
+  duration: number;
+  timestamp: number;
+}
 
 export interface UploadDebugData {
   objectUrl?: string;

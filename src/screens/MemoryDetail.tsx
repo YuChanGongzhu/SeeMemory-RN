@@ -10,7 +10,7 @@ import {GradientBg} from '../ui/Gradient';
 import {TimelineNode} from '../ui/TimelineNode';
 import {BottomSheet} from '../ui/BottomSheet';
 import {useWriteGate} from '../hooks/useWriteGate';
-import {useMr20Playback} from '../hooks/useMr20Playback';
+import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {useNav} from '../navigation/nav';
 import type {MemoryCard, TimelineRecord} from '../types/memory';
 
@@ -29,7 +29,7 @@ export function MemoryDetail() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const gate = useWriteGate();
-  const player = useMr20Playback();
+  const player = useAudioPlayback();
   const card: MemoryCard = nav.current.params?.card;
 
   const [activeTab, setActiveTab] = useState<'origin' | 'append'>('origin');
@@ -67,11 +67,16 @@ export function MemoryDetail() {
     });
     out.forEach((c: any) => {
       if (c.items.length > 1) {
-        const dur = Math.max(1, c.lastTime - c.startTime);
-        const ds = dur < 60 ? `${dur} 分钟` : `${Math.floor(dur / 60)} 小时 ${dur % 60} 分钟`;
+        const dur = c.lastTime - c.startTime;
         const s = c.items[0].time?.match(/\d{1,2}:\d{2}/)?.[0] || '';
         const e = c.items[c.items.length - 1].time?.match(/\d{1,2}:\d{2}/)?.[0] || '';
-        c.name = `${s} - ${e} 期间片段 (${ds})`;
+        if (dur <= 0 || s === e) {
+          // 同一分钟内的片段：不再显示 "18:53 - 18:53 (1分钟)" 这种冗余区间。
+          c.name = `${s} 期间片段`;
+        } else {
+          const ds = dur < 60 ? `${dur} 分钟` : `${Math.floor(dur / 60)} 小时 ${dur % 60} 分钟`;
+          c.name = `${s} - ${e} 期间片段 (${ds})`;
+        }
       } else c.name = null;
     });
     return out;
@@ -214,10 +219,10 @@ export function MemoryDetail() {
                     <View key={c.id} style={{paddingLeft: 24}}>
                       <View style={styles.dotGroup}><View style={styles.dotGroupInner} /></View>
                       <TouchableOpacity style={styles.clusterHead} onPress={() => setExpanded(p => ({...p, [c.id]: !p[c.id]}))}>
-                        <Text style={styles.clusterName}>{c.name}</Text>
-                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 4}}>
+                        <Text style={styles.clusterName} numberOfLines={1}>{c.name}</Text>
+                        <View style={styles.clusterRight}>
                           <Text style={styles.clusterCount}>包含 {c.items.length} 段记录</Text>
-                          <ChevronDown size={14} color={colors.textSub} style={{transform: [{rotate: open ? '180deg' : '0deg'}]}} />
+                          <ChevronDown size={16} color={colors.textSub} style={{transform: [{rotate: open ? '180deg' : '0deg'}]}} />
                         </View>
                       </TouchableOpacity>
                       {open ? (
@@ -363,7 +368,8 @@ const styles = StyleSheet.create({
   dotGroup: {position: 'absolute', left: -8, top: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: colors.bgSecondary, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', zIndex: 2},
   dotGroupInner: {width: 6, height: 6, borderRadius: 3, backgroundColor: colors.textSub},
   clusterHead: {backgroundColor: colors.nested, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 16, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  clusterName: {fontSize: 14, fontWeight: '600', color: colors.textMain},
+  clusterName: {flex: 1, minWidth: 0, marginRight: 8, fontSize: 14, fontWeight: '600', color: colors.textMain},
+  clusterRight: {flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0},
   clusterCount: {fontSize: 12, color: colors.textSub},
   empty: {textAlign: 'center', paddingVertical: 40, color: colors.textSub, fontSize: 14},
   toast: {position: 'absolute', alignSelf: 'center', backgroundColor: 'rgba(26,26,26,0.92)', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 14},

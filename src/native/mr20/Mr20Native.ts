@@ -1,6 +1,6 @@
 /**
- * Mr20Native — 对接原生 TurboModule `RTNMr20Module`（与 RTNRingModule 同处一个
- * LocalPod）。仅暴露通用 BLE 原语；GJJY 协议逻辑在 protocol.ts / Mr20Client.ts。
+ * Mr20Native — 对接原生 TurboModule `RTNMr20Module`（独立 LocalPod，与其它硬件
+ * 模块无关）。仅暴露通用 BLE 原语；GJJY 协议逻辑在 protocol.ts / Mr20Client.ts。
  *
  * 原生未链接时（例如尚未 pod install / 重新构建）降级为抛错的桩，App 不会崩。
  */

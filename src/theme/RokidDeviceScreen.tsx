@@ -2,7 +2,7 @@ import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Image} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {RingModule} from '../native/RingModule';
+import {AudioPlayerModule} from '../native/AudioPlayerModule';
 import {
   ROKID_DEFAULTS,
   RokidModule,
@@ -263,7 +263,7 @@ export function RokidDeviceScreen({onBack}: {onBack: () => void}) {
       if (typeof (RokidModule as any).stopAudioPlayback === 'function') {
         await RokidModule.stopAudioPlayback();
       } else {
-        await RingModule.stopAudioPlayback();
+        await AudioPlayerModule.stopAudioPlayback();
       }
       setRokidPlayingPath(null);
       setRokidPlaybackCurrentTime(0);
@@ -278,7 +278,7 @@ export function RokidDeviceScreen({onBack}: {onBack: () => void}) {
       if (typeof (RokidModule as any).playAudioFile === 'function') {
         playbackResult = await RokidModule.playAudioFile(media.filePath);
       } else {
-        playbackResult = await RingModule.playAudioFile(media.filePath);
+        playbackResult = await AudioPlayerModule.playAudioFile(media.filePath);
       }
       setRokidPlaybackDuration(playbackResult?.duration || media.duration || 0);
       setRokidPlayingPath(media.filePath);

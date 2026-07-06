@@ -14,6 +14,8 @@ import {LoginPromptProvider, useLoginPrompt} from './src/hooks/useWriteGate';
 import {NavProvider} from './src/navigation/nav';
 import {RootView} from './src/navigation/Root';
 import {Mr20Provider} from './src/hooks/useMr20';
+import {ImagePreviewProvider} from './src/hooks/useImagePreview';
+import {CreateSummaryProvider} from './src/hooks/useCreateSummary';
 import {AppDrawer} from './src/components/AppDrawer';
 import {LoginScreen} from './src/screens/LoginScreen';
 import {colors} from './src/design/tokens';
@@ -52,12 +54,16 @@ function AuthGate() {
   return (
     <Mr20Provider>
       <NavProvider>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.bgApp} />
-        <View style={styles.root}>
-          <RootView />
-        </View>
-        <AppDrawer />
-        <LoginPromptOverlay />
+        <ImagePreviewProvider>
+          <CreateSummaryProvider>
+            <StatusBar barStyle="dark-content" backgroundColor={colors.bgApp} />
+            <View style={styles.root}>
+              <RootView />
+            </View>
+            <AppDrawer />
+            <LoginPromptOverlay />
+          </CreateSummaryProvider>
+        </ImagePreviewProvider>
       </NavProvider>
     </Mr20Provider>
   );

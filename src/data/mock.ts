@@ -9,6 +9,22 @@ export const MOCK_TODOS: Todo[] = [
 
 const U = (id: string) => `https://images.unsplash.com/photo-${id}?q=80&w=1200&auto=format&fit=crop`;
 
+/**
+ * 首次/空态欢迎卡。用户尚无任何真实记忆碎片时，首页只展示这一条（不再回退整套
+ * DEMO_MEMORIES 演示数据）。
+ */
+export const WELCOME_MEMORY: MemoryCard = {
+  id: 'm4', type: 'memory', tag: '公告', title: '欢迎来到 imemory ✦',
+  keyQuote: 'imemory 的核心优势是强大的记忆检索与跨会话调用能力。', time: '今天 刚刚', hasAI: true,
+  aiSummary: 'imemory 是一款无感采集、AI 驱动的第二大脑工具。本篇是产品的核心功能说明与欢迎指引。',
+  tags: ['官方公告', '产品介绍', '新手指引'],
+  timelineRecords: [
+    {id: 1, time: '第一步', type: 'text', content: '无感采集：无需主动触发录音，记忆在后台自动产生。'},
+    {id: 2, time: '第二步', type: 'image', url: U('1618005182384-a83a8bd57fbe')},
+    {id: 3, time: '第三步', type: 'text', content: '强大的自然语言搜索：你可以自然地问“上周我和谁聊过这个话题？”。'},
+  ],
+};
+
 export const DEMO_MEMORIES: MemoryCard[] = [
   {
     id: 'm_text_only', type: 'memory', tag: '随笔', time: '今天 09:00',
@@ -74,17 +90,7 @@ export const DEMO_MEMORIES: MemoryCard[] = [
       {id: 2, time: '15:30', type: 'text', content: '今天摔得大腿都青了，但滑起来风驰电掣的感觉真的是太爽了！'},
     ],
   },
-  {
-    id: 'm4', type: 'memory', tag: '公告', title: '欢迎来到 imemory ✦',
-    keyQuote: 'imemory 的核心优势是强大的记忆检索与跨会话调用能力。', time: '今天 刚刚', hasAI: true,
-    aiSummary: 'imemory 是一款无感采集、AI 驱动的第二大脑工具。本篇是产品的核心功能说明与欢迎指引。',
-    tags: ['官方公告', '产品介绍', '新手指引'],
-    timelineRecords: [
-      {id: 1, time: '第一步', type: 'text', content: '无感采集：无需主动触发录音，记忆在后台自动产生。'},
-      {id: 2, time: '第二步', type: 'image', url: U('1618005182384-a83a8bd57fbe')},
-      {id: 3, time: '第三步', type: 'text', content: '强大的自然语言搜索：你可以自然地问“上周我和谁聊过这个话题？”。'},
-    ],
-  },
+  WELCOME_MEMORY,
 ];
 
 export const DEMO_TOPIC_ARCHIVES: TopicArchive[] = [

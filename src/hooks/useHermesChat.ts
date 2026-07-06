@@ -9,15 +9,19 @@ function createMessageId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// 聊天历史按登录用户维度持久化。后端 /app/chat 本就是按用户分流（与选中的记忆盒子无关），
+// 因此用固定的单会话 key —— 避免「未选盒子 / 盒子水合竞态」时 boxId 为空，导致历史存不下来
+// （表现为每次重开对话都被清空）。登出时统一清除，避免换账号后串台。
+const CHAT_SESSION_KEY = 'self';
+
 export function useHermesChat() {
   const {selectedDevice} = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const streamRef = useRef<StreamHandle | null>(null);
-  const boxId = selectedDevice?.subDomain || '';
-  // 标记当前已水合完成的盒子，避免水合前就把空历史写回覆盖磁盘。
-  const hydratedBoxRef = useRef<string | null>(null);
+  // 已从磁盘水合完成的标记：水合前不回写，避免用空历史覆盖已存的会话。
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -25,36 +29,27 @@ export function useHermesChat() {
     };
   }, []);
 
-  // 切换盒子：中断当前流，加载该盒子已持久化的历史（每个盒子独立会话）。
+  // 挂载时加载已持久化的会话历史（单用户单会话，不随记忆盒子切换而清空）。
   useEffect(() => {
-    streamRef.current?.abort();
-    streamRef.current = null;
-    setIsSending(false);
-    setMessages([]);
-    hydratedBoxRef.current = null;
-
-    if (!boxId) {
-      hydratedBoxRef.current = '';
-      return;
-    }
     let cancelled = false;
-    loadChatHistory(boxId).then(history => {
+    loadChatHistory(CHAT_SESSION_KEY).then(history => {
       if (cancelled) return;
-      setMessages(history);
-      hydratedBoxRef.current = boxId;
+      // 若用户在磁盘读完成前已开始发消息，则保留其消息，不被历史覆盖。
+      setMessages(prev => (prev.length ? prev : history));
+      hydratedRef.current = true;
     });
     return () => {
       cancelled = true;
     };
-  }, [boxId]);
+  }, []);
 
-  // 按盒子持久化历史；流式期间跳过，避免每个 delta 都写一次盘。
+  // 持久化历史；水合完成前 / 流式期间跳过（避免每个 delta 都写一次盘）。
   useEffect(() => {
-    if (!boxId || hydratedBoxRef.current !== boxId || isSending) {
+    if (!hydratedRef.current || isSending) {
       return;
     }
-    saveChatHistory(boxId, messages);
-  }, [boxId, messages, isSending]);
+    saveChatHistory(CHAT_SESSION_KEY, messages);
+  }, [messages, isSending]);
 
   const appendSystemMessage = useCallback((text: string) => {
     setMessages(prev => [
@@ -64,7 +59,10 @@ export function useHermesChat() {
   }, []);
 
   const send = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (
+      text: string,
+      attachment?: {audioPath?: string; audioDurationMs?: number},
+    ): Promise<boolean> => {
       const content = text.trim();
       if (!content) {
         return false;
@@ -78,6 +76,9 @@ export function useHermesChat() {
         id: createMessageId('user'),
         role: 'user',
         text: content,
+        // 语音消息：气泡展示可回听的音频卡片；发给 agent 的仍是转写文本(content)。
+        ...(attachment?.audioPath ? {audioPath: attachment.audioPath} : {}),
+        ...(attachment?.audioDurationMs ? {audioDurationMs: attachment.audioDurationMs} : {}),
       };
       const assistantId = createMessageId('assistant');
       const assistantMessage: ChatMessage = {
@@ -152,15 +153,21 @@ export function useHermesChat() {
     [appendSystemMessage, selectedDevice, send],
   );
 
+  // 语音消息：气泡展示可本地回听的音频卡片，发给 agent 的是转写文本。
+  const sendVoice = useCallback(
+    async (params: {filePath: string; durationMs: number; text: string}): Promise<boolean> => {
+      return send(params.text, {audioPath: params.filePath, audioDurationMs: params.durationMs});
+    },
+    [send],
+  );
+
   const reset = useCallback(() => {
     streamRef.current?.abort();
     streamRef.current = null;
     setMessages([]);
     setIsSending(false);
-    if (boxId) {
-      clearChatHistory(boxId);
-    }
-  }, [boxId]);
+    clearChatHistory(CHAT_SESSION_KEY);
+  }, []);
 
   return useMemo(
     () => ({
@@ -170,8 +177,9 @@ export function useHermesChat() {
       isUploadingImage,
       send,
       sendImageMessage,
+      sendVoice,
       reset,
     }),
-    [selectedDevice, messages, isSending, isUploadingImage, send, sendImageMessage, reset],
+    [selectedDevice, messages, isSending, isUploadingImage, send, sendImageMessage, sendVoice, reset],
   );
 }

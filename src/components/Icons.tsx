@@ -20,15 +20,6 @@ export function GlassesIcon({size = 18, color = 'currentColor', strokeWidth = 1.
 }
 
 // 戒指图标
-export function RingIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-      <Circle cx="12" cy="13.6" r="5.4" />
-      <Path d="M9.7 8.4 10.4 4h3.2l.7 4.4" />
-    </Svg>
-  );
-}
-
 // 麦克风图标
 export function MicIcon({size = 18, color = 'currentColor', strokeWidth = 1.7}: IconProps) {
   return (

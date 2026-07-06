@@ -1,50 +1,29 @@
-import React, {useEffect, useState} from 'react';
-import {View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {View, Text, TextInput, FlatList, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {ChevronLeft, Search, Archive as ArchiveIcon, User, Tag as TagIcon} from 'lucide-react-native';
+import {ChevronLeft, Sparkles, Archive as ArchiveIcon, User, Tag as TagIcon} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {useNav} from '../navigation/nav';
 import {useAuth} from '../auth/AuthContext';
-import {listMemorySummaries, getMemorySummary, type MemorySummaryCard, type MemorySummaryDetail} from '../apis/requests/summaries';
+import {
+  listMemorySummaries, getMemorySummary, getMemorySummaryTimeline,
+  type ListMemorySummaryRequest,
+} from '../apis/requests/summaries';
+import {summaryCardToArchive, summaryDetailToArchive} from '../apis/mappers/summary';
 import {DEMO_TOPIC_ARCHIVES} from '../data/mock';
 import type {TopicArchive} from '../types/memory';
 
-const FILTERS = ['全部', '人物', '项目', '周期', '自定义'];
-const FILTER_TYPE: Record<string, 'person' | 'event' | 'time' | undefined> = {
-  全部: undefined, 人物: 'person', 项目: 'event', 周期: 'time', 自定义: undefined,
+const PAGE_SIZE = 20;
+
+// 过滤芯片 → 后端 list 参数（summary_type / period_type）。列表接口无文本检索，关键词走客户端。
+const FILTERS = ['全部', '人物', '项目', '周期', '自定义'] as const;
+const FILTER_PARAMS: Record<string, Pick<ListMemorySummaryRequest, 'summary_type' | 'period_type'>> = {
+  全部: {},
+  人物: {summary_type: 'person'},
+  项目: {summary_type: 'event'},
+  周期: {summary_type: 'time'},
+  自定义: {period_type: 'custom'},
 };
-const TYPE_TAG: Record<string, '人物' | '项目' | '话题'> = {person: '人物', event: '项目', time: '话题'};
-
-function cardToArchive(c: MemorySummaryCard): TopicArchive {
-  return {
-    id: c.summary_id,
-    tag: TYPE_TAG[c.summary_type] || '话题',
-    entity: c.target_labels?.[0] || c.title,
-    title: c.title,
-    date: (c.created_at || '').slice(0, 10).replace(/-/g, '.'),
-    count: c.segment_count,
-    timespan: c.period_type,
-    auraColor: c.summary_type === 'person' ? '#BF5AF2' : '#0A84FF',
-    insight: c.brief,
-    keywords: [],
-    topicGroups: [],
-  };
-}
-
-function detailToArchive(base: TopicArchive, d: MemorySummaryDetail): TopicArchive {
-  return {
-    ...base,
-    insight: d.reflection || d.brief || base.insight,
-    keywords: d.keywords || [],
-    topicGroups: (d.timeline || []).map((t, i) => ({
-      id: `${base.id}_${i}`,
-      timeRange: t.anchor,
-      title: t.content,
-      count: t.session_count,
-      drillDownCard: {id: `${base.id}_${i}`, type: 'memory', tag: base.tag, time: t.anchor, title: t.content, aiSummary: t.content, hasAI: true},
-    })),
-  };
-}
 
 function topicIcon(tag: string, color = 'rgba(255,255,255,0.9)') {
   if (tag === '人物') return <User size={14} color={color} />;
@@ -62,7 +41,7 @@ function TopicCard({data, onPress}: {data: TopicArchive; onPress: () => void}) {
       </View>
       <Text style={styles.cardTitle}>{data.title}</Text>
       <View style={styles.metaRow}>
-        <View style={{flexDirection: 'row', alignItems: 'center', gap: 4}}>
+        <View style={styles.metaLeft}>
           <ArchiveIcon size={14} color="rgba(255,255,255,0.5)" />
           <Text style={styles.meta}>关联 {data.count} 碎片</Text>
         </View>
@@ -72,81 +51,151 @@ function TopicCard({data, onPress}: {data: TopicArchive; onPress: () => void}) {
   );
 }
 
-/** 沉淀 ArchiveTab — Prototype App.jsx:2875. Wired to /v1/memory/summary/list (device); mock fallback. */
+/** 沉淀 ArchiveTab — 多维总结的浏览/检索：芯片走后端 summary/list（type/period），文本关键词客户端过滤，滚动分页。 */
 export function ArchivePage() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
-  const {selectedDevice} = useAuth();
-  const [filter, setFilter] = useState('全部');
+  const {isGuest} = useAuth();
+
+  const [filter, setFilter] = useState<string>('全部');
+  const [query, setQuery] = useState('');
+
   const [items, setItems] = useState<TopicArchive[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reqSeq = useRef(0);
 
+  const fetchPage = useCallback(
+    (targetPage: number, replace: boolean) => {
+      // 游客没有云端沉淀，直接展示 demo。
+      if (isGuest) {
+        setItems(DEMO_TOPIC_ARCHIVES);
+        setTotalPages(1);
+        setLoading(false);
+        return;
+      }
+      const seq = ++reqSeq.current;
+      if (replace) setLoading(true); else setLoadingMore(true);
+      setError(null);
+      listMemorySummaries({...FILTER_PARAMS[filter], page: targetPage, page_size: PAGE_SIZE})
+        .then(res => {
+          if (seq !== reqSeq.current) return; // 丢弃过期响应（快速切芯片）
+          const mapped = (res.items || []).map(summaryCardToArchive);
+          setItems(prev => (replace ? mapped : [...prev, ...mapped]));
+          setPage(res.page || targetPage);
+          setTotalPages(res.total_pages || 1);
+        })
+        .catch(e => {
+          if (seq !== reqSeq.current) return;
+          if (replace) setItems([]);
+          setError(e instanceof Error ? e.message : '加载失败');
+        })
+        .finally(() => {
+          if (seq !== reqSeq.current) return;
+          setLoading(false);
+          setLoadingMore(false);
+        });
+    },
+    [filter, isGuest],
+  );
+
+  // 切换芯片：回到第 1 页重拉。
   useEffect(() => {
-    let alive = true;
-    if (!selectedDevice) {
-      setItems(DEMO_TOPIC_ARCHIVES);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    listMemorySummaries({summary_type: FILTER_TYPE[filter], page: 1, page_size: 20})
-      .then(res => {
-        if (!alive) return;
-        const mapped = (res.items || []).map(cardToArchive);
-        setItems(mapped.length ? mapped : DEMO_TOPIC_ARCHIVES);
-      })
-      .catch(() => alive && setItems(DEMO_TOPIC_ARCHIVES))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [filter, selectedDevice?.subDomain]);
+    fetchPage(1, true);
+  }, [fetchPage]);
 
-  const list = filter === '全部' ? items : items.filter(a => a.tag === TYPE_TAG[FILTER_TYPE[filter] || ''] || FILTER_TYPE[filter] === undefined);
+  const loadMore = () => {
+    if (loading || loadingMore || page >= totalPages) return;
+    fetchPage(page + 1, false);
+  };
+
+  // 关键词检索：列表接口无 query 字段，对已加载项做标题/实体/洞察/关键词客户端过滤。
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(a =>
+      [a.title, a.entity, a.insight, ...(a.keywords || [])].join(' ').toLowerCase().includes(q),
+    );
+  }, [items, query]);
 
   const openTopic = (a: TopicArchive) => {
-    getMemorySummary(String(a.id))
-      .then(d => nav.push('topicSummary', {data: detailToArchive(a, d)}))
+    Promise.all([
+      getMemorySummary(String(a.id)),
+      getMemorySummaryTimeline(String(a.id)).catch(() => undefined),
+    ])
+      .then(([d, tl]) => nav.push('topicSummary', {data: summaryDetailToArchive(d, tl)}))
       .catch(() => nav.push('topicSummary', {data: a}));
   };
 
   return (
     <View style={styles.root}>
       <View style={[styles.header, {paddingTop: insets.top + 8}]}>
-        <View style={{flexDirection: 'row', alignItems: 'center', gap: 12}}>
+        <View style={styles.headerLeft}>
           <TouchableOpacity onPress={nav.pop} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
             <ChevronLeft size={24} color={colors.textMain} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>我的沉淀</Text>
         </View>
-        <View style={styles.searchBtn}>
-          <Search size={18} color={colors.textMain} />
-        </View>
+      </View>
+
+      {/* 常驻搜索栏，与 HomeHub 一致（客户端过滤已加载项）。 */}
+      <View style={styles.searchRow}>
+        <Sparkles size={16} color={colors.textSub} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="搜索沉淀"
+          placeholderTextColor={colors.textSub}
+          value={query}
+          onChangeText={setQuery}
+          autoCapitalize="none"
+          returnKeyType="search"
+        />
       </View>
 
       <View style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap: 10, paddingHorizontal: 20}}>
-          {FILTERS.map(f => (
-            <TouchableOpacity key={f} onPress={() => setFilter(f)} style={[styles.filterChip, {backgroundColor: filter === f ? colors.primary : colors.border}]}>
-              <Text style={{fontSize: 13, fontWeight: '600', color: filter === f ? '#fff' : colors.textSub}}>{f}</Text>
+        <FlatList
+          horizontal
+          data={FILTERS as unknown as string[]}
+          keyExtractor={f => f}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterContent}
+          renderItem={({item: f}) => (
+            <TouchableOpacity onPress={() => setFilter(f)} style={[styles.filterChip, {backgroundColor: filter === f ? colors.primary : colors.border}]}>
+              <Text style={[styles.filterText, {color: filter === f ? '#fff' : colors.textSub}]}>{f}</Text>
             </TouchableOpacity>
-          ))}
-        </ScrollView>
+          )}
+        />
       </View>
 
-      {loading ? (
-        <ActivityIndicator color={colors.primary} style={{marginTop: 40}} />
+      {loading && items.length === 0 ? (
+        <ActivityIndicator color={colors.primary} style={styles.spinner} />
       ) : (
-        <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          {list.length ? (
-            list.map(a => <TopicCard key={a.id} data={a} onPress={() => openTopic(a)} />)
-          ) : (
+        <FlatList
+          data={shown}
+          keyExtractor={a => a.id}
+          renderItem={({item}) => <TopicCard data={item} onPress={() => openTopic(item)} />}
+          contentContainerStyle={styles.body}
+          showsVerticalScrollIndicator={false}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.textSub} style={{marginVertical: 20}} /> : null}
+          ListEmptyComponent={
             <View style={styles.empty}>
               <ArchiveIcon size={48} color={colors.border} />
-              <Text style={styles.emptyText}>暂无相关维度的沉淀档案</Text>
+              <Text style={styles.emptyText}>
+                {error ? `加载失败：${error}` : query.trim() ? `没有匹配「${query.trim()}」的沉淀` : '暂无相关维度的沉淀档案'}
+              </Text>
+              {error ? (
+                <TouchableOpacity style={styles.retry} onPress={() => fetchPage(1, true)}>
+                  <Text style={styles.retryText}>重试</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          )}
-        </ScrollView>
+          }
+        />
       )}
     </View>
   );
@@ -155,18 +204,26 @@ export function ArchivePage() {
 const styles = StyleSheet.create({
   root: {flex: 1, backgroundColor: colors.bgApp},
   header: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 16},
+  headerLeft: {flexDirection: 'row', alignItems: 'center', gap: 12},
   headerTitle: {fontSize: 22, fontWeight: '800', color: colors.textMain},
-  searchBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center'},
+  searchRow: {flexDirection: 'row', alignItems: 'center', gap: 8, height: 44, marginHorizontal: 20, marginBottom: 16, paddingHorizontal: 14, borderRadius: radius.lg, backgroundColor: colors.bgSecondary},
+  searchInput: {flex: 1, fontSize: 15, color: colors.textMain, padding: 0},
   filterBar: {paddingBottom: 16},
+  filterContent: {gap: 10, paddingHorizontal: 20},
   filterChip: {paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.pill},
-  body: {paddingHorizontal: 20, paddingBottom: 120},
+  filterText: {fontSize: 13, fontWeight: '600'},
+  spinner: {marginTop: 40},
+  body: {paddingHorizontal: 20, paddingBottom: 120, flexGrow: 1},
   card: {backgroundColor: colors.darkCard, borderRadius: radius.bigCard, padding: 24, marginBottom: 16, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.08)'},
   aura: {position: 'absolute', top: -40, right: -40, width: 120, height: 120, borderRadius: 60, opacity: 0.25},
   tagPill: {flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, marginBottom: 16},
   tagPillText: {color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700'},
   cardTitle: {fontSize: 20, fontWeight: '700', color: '#fff', lineHeight: 28, marginBottom: 16},
   metaRow: {flexDirection: 'row', alignItems: 'center', gap: 16},
+  metaLeft: {flexDirection: 'row', alignItems: 'center', gap: 4},
   meta: {fontSize: 13, color: 'rgba(255,255,255,0.5)'},
   empty: {alignItems: 'center', marginTop: 60, gap: 16},
-  emptyText: {color: colors.textTertiary, fontSize: 14},
+  emptyText: {color: colors.textTertiary, fontSize: 14, textAlign: 'center', paddingHorizontal: 40},
+  retry: {paddingHorizontal: 20, paddingVertical: 10, borderRadius: radius.pill, backgroundColor: colors.bgSecondary},
+  retryText: {fontSize: 14, fontWeight: '600', color: colors.textMain},
 });

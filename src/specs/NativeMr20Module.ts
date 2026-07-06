@@ -2,7 +2,7 @@ import {TurboModule, TurboModuleRegistry} from 'react-native';
 
 // ============ TurboModule 接口 ============
 // 通用 BLE 原语（不含 MR20 协议逻辑；GJJY 编解码全在 JS 的 protocol.ts）。
-// 原生模块与 RTNRingModule 同处一个 LocalPod，避免新增第三方 pod。
+// 独立 LocalPod，纯 CoreBluetooth，与其它硬件模块无关。
 
 export interface Spec extends TurboModule {
   addListener(eventName: string): void;

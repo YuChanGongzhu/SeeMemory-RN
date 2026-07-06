@@ -1,24 +1,16 @@
 import React, {useEffect, useState} from 'react';
 import {View, Text, TouchableOpacity, StyleSheet, BackHandler} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {RingModule, isRingModuleAvailable, ringEventEmitter} from '../native/RingModule';
 import {RokidModule, isRokidModuleAvailable, rokidEventEmitter, type RokidAuthState} from '../native/RokidModule';
-import type {DeviceStatus, RingDevice} from '../specs/NativeRingModule';
-import {RingDeviceScreen} from './RingDeviceScreen';
 import {RokidDeviceScreen} from './RokidDeviceScreen';
 import {useTheme} from './ThemeProvider';
 
-type DeviceMode = 'home' | 'ring' | 'rokid';
+type DeviceMode = 'home' | 'rokid';
 
 export function DevicesScreen() {
   const {theme} = useTheme();
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<DeviceMode>('home');
-
-  // 戒指实时状态（SDK 支持：getDeviceStatus / isCapturing / onDeviceConnected|Disconnected）
-  const [ringStatus, setRingStatus] = useState<DeviceStatus>('disconnected');
-  const [ringDeviceName, setRingDeviceName] = useState<string | null>(null);
-  const [ringCapturing, setRingCapturing] = useState(false);
 
   // Rokid 实时状态（SDK 支持：getAuthState / getSavedMedia + 授权/媒体事件）
   const [rokidAuthorized, setRokidAuthorized] = useState(false);
@@ -38,25 +30,12 @@ export function DevicesScreen() {
         .catch(() => {});
     };
 
-    if (isRingModuleAvailable) {
-      RingModule.getDeviceStatus().then(st => { if (!cancelled) setRingStatus(st); }).catch(() => {});
-      RingModule.isCapturing().then(c => { if (!cancelled) setRingCapturing(Boolean(c)); }).catch(() => {});
-    }
     if (isRokidModuleAvailable) {
       RokidModule.getAuthState().then(st => { if (!cancelled) setRokidAuthorized(Boolean(st?.isAuthenticated)); }).catch(() => {});
       refreshRokidCounts();
     }
 
     const subs = [
-      ringEventEmitter.addListener('onDeviceConnected', (device: RingDevice) => {
-        setRingStatus('connected');
-        setRingDeviceName(device?.name || null);
-      }),
-      ringEventEmitter.addListener('onDeviceDisconnected', () => {
-        setRingStatus('disconnected');
-        setRingDeviceName(null);
-        setRingCapturing(false);
-      }),
       rokidEventEmitter.addListener('onRokidAuthStateChanged', (st: RokidAuthState) => {
         setRokidAuthorized(Boolean(st?.isAuthenticated));
       }),
@@ -79,30 +58,8 @@ export function DevicesScreen() {
     return () => sub.remove();
   }, [mode]);
 
-  if (mode === 'ring') {
-    return <RingDeviceScreen onBack={() => setMode('home')} />;
-  }
   if (mode === 'rokid') {
     return <RokidDeviceScreen onBack={() => setMode('home')} />;
-  }
-
-  // 戒指卡片状态文案
-  let ringStatusText: string;
-  let ringStatusOk = false;
-  if (!isRingModuleAvailable) {
-    ringStatusText = '当前构建未包含戒指模块';
-  } else if (ringCapturing) {
-    ringStatusText = '录音中…';
-    ringStatusOk = true;
-  } else if (ringStatus === 'connected') {
-    ringStatusText = ringDeviceName ? `已连接 ${ringDeviceName}` : '已连接';
-    ringStatusOk = true;
-  } else if (ringStatus === 'connecting') {
-    ringStatusText = '连接中…';
-  } else if (ringStatus === 'scanning') {
-    ringStatusText = '扫描中…';
-  } else {
-    ringStatusText = '未连接 · 点击扫描';
   }
 
   // Rokid 卡片状态文案
@@ -158,14 +115,6 @@ export function DevicesScreen() {
 
       <View style={{padding: s.md}}>
         {renderCard({
-          icon: '💍',
-          title: '智能戒指',
-          features: '扫描 · 蓝牙连接 · 录音 · 降噪',
-          statusText: ringStatusText,
-          statusOk: ringStatusOk,
-          onPress: () => setMode('ring'),
-        })}
-        {renderCard({
           icon: '👓',
           title: 'Rokid 眼镜',
           features: '授权 · 打开画面 · 录音 · 拍照',
@@ -175,7 +124,7 @@ export function DevicesScreen() {
         })}
 
         <Text style={{color: theme.colors.textMuted, fontSize: 11, lineHeight: 18, marginTop: s.sm, paddingHorizontal: 4}}>
-          戒指与 Rokid 眼镜都是记忆采集硬件，相互独立。选择对应类型进入各自的连接、录音与素材管理。
+          Rokid 眼镜是记忆采集硬件。选择进入连接、录音与素材管理。
         </Text>
       </View>
     </View>

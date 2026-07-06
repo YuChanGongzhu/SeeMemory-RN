@@ -1,7 +1,7 @@
 import React from 'react';
 import {View, StyleSheet} from 'react-native';
 import {colors} from '../design/tokens';
-import {useNav} from './nav';
+import {useNav, FrameProvider, type Frame} from './nav';
 import {HomeHub} from '../screens/HomeHub';
 import {ChatPage} from '../screens/ChatPage';
 import {EditorPage} from '../screens/EditorPage';
@@ -16,11 +16,8 @@ import {PowerStorePage} from '../screens/PowerStorePage';
 import {ProfilePage} from '../screens/ProfilePage';
 import {TimelinePage} from '../screens/TimelinePage';
 
-/** Renders the top frame of the nav stack (hub-and-spoke, no tab bar). */
-export function RootView() {
-  const {current} = useNav();
-
-  switch (current.name) {
+function renderScreen(name: Frame['name']) {
+  switch (name) {
     case 'home':
       return <HomeHub />;
     case 'chat':
@@ -54,6 +51,34 @@ export function RootView() {
   }
 }
 
+/**
+ * Hub-and-spoke stack. The whole stack stays mounted — lower frames are just
+ * hidden (display:none) so their scroll position and local state survive a
+ * push/pop round-trip (返回卡片列表不再跳回顶部). Each frame is wrapped in a
+ * FrameProvider so its screen reads its own params, not the top frame's.
+ */
+export function RootView() {
+  const {stack} = useNav();
+  const topIndex = stack.length - 1;
+
+  return (
+    <View style={styles.stack}>
+      {stack.map((frame, i) => (
+        <View
+          key={frame.key ?? `${frame.name}-${i}`}
+          style={[styles.frame, i === topIndex ? null : styles.hidden]}
+          pointerEvents={i === topIndex ? 'auto' : 'none'}
+          aria-hidden={i !== topIndex}>
+          <FrameProvider frame={frame}>{renderScreen(frame.name)}</FrameProvider>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  stack: {flex: 1},
+  frame: {...StyleSheet.absoluteFillObject, backgroundColor: colors.bgApp},
+  hidden: {display: 'none'},
   fallback: {flex: 1, backgroundColor: colors.bgApp},
 });

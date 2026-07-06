@@ -8,7 +8,7 @@ import {
   Pressable,
 } from 'react-native';
 import {useTheme} from '../theme/ThemeProvider';
-import {MicIcon, CameraIcon, GlassesIcon, RingIcon} from './Icons';
+import {MicIcon, CameraIcon, GlassesIcon} from './Icons';
 import {AnimatedWaveform, RecDot} from './Animated';
 
 type CapturePanelProps = {
@@ -117,14 +117,6 @@ export function CapturePanel({visible, onClose}: CapturePanelProps) {
                     取回刚刚 30 秒
                   </Text>
                 </TouchableOpacity>
-              </View>
-
-              {/* Ring tip */}
-              <View style={[localStyles.ringTip, {backgroundColor: '#E7E8DD'}]}>
-                <RingIcon size={20} color="#7C8474" />
-                <Text style={[localStyles.ringTipText, {color: theme.colors.textSecondary}]}>
-                  双击戒指，随时随地收藏当下这一刻
-                </Text>
               </View>
             </View>
           )}
@@ -240,17 +232,5 @@ const localStyles = StyleSheet.create({
   actionBtnSubtext: {
     fontSize: 10,
     marginTop: 2,
-  },
-  ringTip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderRadius: 16,
-    padding: 13,
-    paddingLeft: 15,
-  },
-  ringTipText: {
-    fontSize: 12.5,
-    flex: 1,
   },
 });

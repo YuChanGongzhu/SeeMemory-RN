@@ -65,3 +65,58 @@ export function getMemorySummary(summaryId: string): Promise<MemorySummaryDetail
     path: `/app/memory/summary/${summaryId}`,
   });
 }
+
+export interface SummaryTimelineEntry {
+  timestamp: string;
+  session_id: string;
+  content: string;
+  topic_events?: {topic_id: string; topic_name: string; category: string; event_content: string}[];
+}
+
+export interface SummaryTimelineBucket {
+  anchor: string;
+  session_count: number;
+  entries: SummaryTimelineEntry[];
+}
+
+export interface MemorySummaryTimeline {
+  summary_id: string;
+  period_type: string;
+  level: string;
+  buckets: SummaryTimelineBucket[];
+  topics: unknown[];
+}
+
+// GET /app/memory/summary/{id}/timeline — 详情页时序记忆线：按桶聚合的真实 sessions（含 content）。
+export function getMemorySummaryTimeline(summaryId: string): Promise<MemorySummaryTimeline> {
+  return baseRequest<MemorySummaryTimeline>({
+    method: 'GET',
+    path: `/app/memory/summary/${summaryId}/timeline`,
+  });
+}
+
+export interface CreateMemorySummaryRequest {
+  summary_type: SummaryType;
+  /** time 模式必填。 */
+  period_type?: SummaryPeriodType;
+  /** time 模式必填，YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS。 */
+  start_time?: string;
+  end_time?: string;
+  /** person=人物 entity_id 列表 / event=事件 event_id 列表（1~10 个）。 */
+  target_ids?: string[];
+}
+
+// POST /app/memory/summary — 由 AI 生成一份多维总结，返回生成好的详情。
+export function createMemorySummary(
+  req: CreateMemorySummaryRequest,
+): Promise<MemorySummaryDetail> {
+  return baseRequest<MemorySummaryDetail>({
+    method: 'POST',
+    path: '/app/memory/summary',
+    // 生成涉及 LLM，放宽超时。
+    timeout: 60000,
+    body: req,
+  });
+}
+
+export type {SummaryType, SummaryPeriodType, SummaryStatus};

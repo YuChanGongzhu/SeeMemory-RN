@@ -1,20 +1,20 @@
 # RingMemoryApp iOS 编译说明
 
-`RingMemoryApp` 是一个基于 React Native 的智能戒指配套 App。当前 iOS 侧已经集成 `BCLRingSDK.xcframework`，可在真机上进行戒指扫描、连接、录音、本地保存、播放以及调试上传。
+`RingMemoryApp` 是一个基于 React Native 的记忆采集配套 App，当前接入 MR20（记忆粒）与 Rokid 眼镜两种硬件，可在真机上进行设备扫描、连接、录音、本地保存、播放以及调试上传。
 
 本文档面向拿到项目后需要使用 Xcode 在 iPhone 上编译运行的同学。
 
 ## 功能概览
 
-- 设备页：扫描智能戒指、连接/断开设备、查看运行日志。
-- 录音页能力：支持 ADPCM / PCM 录音、本地 WAV 保存、录音列表、播放、RNNoise 降噪入口、手动上传调试。
+- 设备页：扫描 MR20 / Rokid 设备、连接/断开、查看运行日志。
+- 录音页能力：支持本地录音同步、录音列表、播放、手动上传调试。
 - 记忆页：记忆召回交互雏形，当前部分数据仍为 mock。
 - 设置页：主题、配置与账号相关的界面雏形。
 
 ## 环境要求
 
 - macOS，并已安装 Xcode。
-- iPhone 真机一台。蓝牙和录音能力建议使用真机测试，模拟器无法完整验证戒指连接。
+- iPhone 真机一台。蓝牙和录音能力建议使用真机测试，模拟器无法完整验证设备连接。
 - Node.js `>= 22.11.0`。
 - npm。
 - CocoaPods。
@@ -47,11 +47,10 @@ RingMemoryApp/
     ├── RingMemoryApp.xcworkspace
     ├── RingMemoryApp.xcodeproj
     ├── Podfile
-    ├── BCLRingSDK.xcframework
     └── RingMemoryApp/
         ├── AppDelegate.swift
-        ├── RTNRingModule.swift
-        ├── RTNRingModule.mm
+        ├── RTNAudioPlayerModule.swift
+        ├── RTNAudioPlayerModule.mm
         └── Info.plist
 ```
 
@@ -147,8 +146,8 @@ npm start
 
 App 运行时会用到以下 iOS 权限：
 
-- 蓝牙：用于扫描和连接智能戒指。
-- 录音/音频：用于录制戒指音频与播放本地音频。
+- 蓝牙：用于扫描和连接 MR20 / Rokid 设备。
+- 录音/音频：用于录制设备音频与播放本地音频。
 - 照片库：用于聊天/上传场景中选择图片。
 - 本地网络：`Info.plist` 已允许本地网络访问，便于开发调试。
 
@@ -157,25 +156,6 @@ App 运行时会用到以下 iOS 权限：
 ```text
 ios/RingMemoryApp/Info.plist
 ```
-
-## BCLRingSDK 说明
-
-项目内已经包含：
-
-```text
-ios/BCLRingSDK.xcframework
-```
-
-并已在 Xcode target 中加入 Frameworks 和 Embed Frameworks。`Podfile` 里还声明了 BCLRingSDK 需要的传递依赖：
-
-- Foil
-- NordicDFU
-- RxSwift / RxRelay / RxCocoa
-- SwiftDate
-- SwiftyBeaver
-- ZIPFoundation
-
-正常情况下不需要额外手动拖入 SDK。若重新执行 `pod install` 后出现依赖缺失，优先确认是否打开的是 `.xcworkspace`。
 
 ## 常见问题
 
@@ -229,19 +209,19 @@ HERMES_CLI_PATH = ${PODS_ROOT}/../../node_modules/hermes-compiler/hermesc/osx-bi
 - 修改 Bundle Identifier 为唯一值。
 - 确认 iPhone 已连接并已信任当前 Mac。
 
-### 5. 扫不到戒指
+### 5. 扫不到设备
 
 请检查：
 
 - 使用真机运行，不要用模拟器验证蓝牙。
 - 手机蓝牙已打开。
 - App 已授权蓝牙权限。
-- 戒指处于可发现/可连接状态。
-- Xcode 控制台和 App 设备页底部“运行日志”中是否有错误信息。
+- 设备处于可发现/可连接状态。
+- Xcode 控制台和 App 设备页底部"运行日志"中是否有错误信息。
 
 ### 6. 录音按钮无效或录不到音频
 
-请先确认已经连接戒指。录音接口依赖已连接设备，未连接时原生模块会返回 `Device not connected`。
+请先确认已经连接设备。录音接口依赖已连接设备，未连接时原生模块会返回 `Device not connected`。
 
 ## 命令行验证
 
@@ -263,9 +243,3 @@ RingMemoryApp
 npm test
 ```
 
-## 相关文档
-
-- `项目现有功能总结.md`：当前功能状态说明。
-- `INTEGRATION_FIX_SUMMARY.md`：近期 iOS 集成与录音链路修复记录。
-- `BCLSDK_TOUCH_RECORDING_CAPABILITIES.md`：BCLSDK 触摸与录音能力分析。
-- `SDK集成文档.md`：早期 SDK 集成说明，部分路径可能与当前实现不同，以当前 `ios/Podfile` 和 `ios/RingMemoryApp/RTNRingModule.swift` 为准。

@@ -16,6 +16,7 @@ import {
   saveToken,
   type SelectedDevice,
 } from '../services/storage';
+import {clearAllChatHistory} from '../services/chatHistoryStore';
 import {
   clearSession as clearSessionSingleton,
   setAuthToken,
@@ -93,6 +94,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
 
   const logout = useCallback(async () => {
     await clearStorageSession();
+    await clearAllChatHistory();
     clearSessionSingleton();
     setAuthTokenState(null);
     setIsGuest(false);

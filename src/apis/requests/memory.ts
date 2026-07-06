@@ -109,4 +109,63 @@ export function searchMemoryFragments(
   });
 }
 
+// —— 总结维度选择器 ——
+
+export interface PersonOption {
+  entity_id: string;
+  name: string;
+  description: string | null;
+  labels: string[];
+}
+
+// GET /app/memory/person/options — 「按人物」总结的人物选择器（query 模糊匹配，空串不过滤）。
+export function listPersonOptions(query = '', limit = 20): Promise<PersonOption[]> {
+  return baseRequest<PersonOption[]>({
+    method: 'GET',
+    path: '/app/memory/person/options',
+    query: {query, limit},
+  });
+}
+
+export interface TopicEventOption {
+  event_id: string;
+  topic_id: string;
+  content: string;
+  timestamp: string;
+  emotion_category: string | null;
+}
+
+export interface SearchTopicEventsResponse {
+  items: TopicEventOption[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface SearchTopicEventsParams {
+  query?: string;
+  startTime?: string;
+  endTime?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+// POST /app/memory/topic-event/search — 「按事件」总结的事件选择器（query 对 content 模糊匹配）。
+export function searchTopicEvents(
+  params: SearchTopicEventsParams = {},
+): Promise<SearchTopicEventsResponse> {
+  return baseRequest<SearchTopicEventsResponse>({
+    method: 'POST',
+    path: '/app/memory/topic-event/search',
+    body: {
+      query: params.query,
+      start_time: params.startTime,
+      end_time: params.endTime,
+      page: params.page ?? 1,
+      page_size: params.pageSize ?? 20,
+    },
+  });
+}
+
 export type {MediaGroup};

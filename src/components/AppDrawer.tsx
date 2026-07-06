@@ -17,6 +17,7 @@ import {Avatar, ProgressBar} from '../ui/kit';
 import {useAuth} from '../auth/AuthContext';
 import {useAppDrawer} from '../hooks/useAppDrawer';
 import {usePoints} from '../hooks/usePoints';
+import {useCreateSummary} from '../hooks/useCreateSummary';
 import {useNav, type ScreenName} from '../navigation/nav';
 
 const {width: SCREEN_W} = Dimensions.get('window');
@@ -61,6 +62,7 @@ export function AppDrawer() {
   const {user, isGuest, logout} = useAuth();
   const account = usePoints();
   const nav = useNav();
+  const {openCreateSummary} = useCreateSummary();
 
   const slide = useRef(new Animated.Value(-DRAWER_W)).current;
   const fade = useRef(new Animated.Value(0)).current;
@@ -156,7 +158,13 @@ export function AppDrawer() {
 
           {/* 记忆沉淀 */}
           <Text style={styles.sectionTitle}>记忆沉淀</Text>
-          <TouchableOpacity style={styles.summaryBtn} activeOpacity={0.8} onPress={() => go('archive')}>
+          <TouchableOpacity
+            style={styles.summaryBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              closeDrawer();
+              openCreateSummary();
+            }}>
             <Sparkles size={16} color={colors.textMain} />
             <Text style={styles.summaryBtnText}>生成多维总结</Text>
           </TouchableOpacity>

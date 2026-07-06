@@ -117,9 +117,6 @@ dependencies {
         implementation jscFlavor
     }
 
-    // ChipletRing SDK for smart ring integration
-    implementation(files("libs/ChipletRing1.0.44.aar"))
-
     // Rokid CXR-L SDK for glasses integration
     implementation("com.rokid.cxr:client-l:1.0.1")
 }
