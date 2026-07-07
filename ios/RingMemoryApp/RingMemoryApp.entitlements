@@ -2,10 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- WiFi 快传：NEHotspotConfiguration 程序化加入设备热点所需能力。 -->
-	<!-- 还需在 Apple Developer 后台为 App ID 勾选 Hotspot Configuration，并在 Xcode -->
-	<!-- Signing & Capabilities 添加 Hotspot Configuration，使该 .entitlements 被 -->
-	<!-- CODE_SIGN_ENTITLEMENTS 引用。 -->
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>
 </dict>
