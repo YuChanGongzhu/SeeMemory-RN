@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {ChevronLeft, MessageCircle, Link as LinkIcon, Check} from 'lucide-react-native';
+import {ChevronLeft, Link as LinkIcon, Check} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {images} from '../design/assets';
 import {useAuth} from '../auth/AuthContext';
@@ -12,8 +12,8 @@ import {sendSmsVerification} from '../apis/requests/user';
 
 type Step = 'main' | 'phone' | 'code' | 'bind';
 
-/** 登录 — faithful to prototype LoginPage (App.jsx:314). Real phone login via
- * AuthContext; WeChat one-tap falls back to guest until WeChat OAuth is wired. */
+/** 登录 — 真实手机号登录走 AuthContext。v1.0 暂不放微信一键授权（未接真实
+ * OAuth，且放出即触发 App Store 4.8 Sign in with Apple 要求）；游客态经「随便看看」。 */
 export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () => void} = {}) {
   const insets = useSafeAreaInsets();
   const {login, loginAsGuest} = useAuth();
@@ -73,15 +73,13 @@ export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () =
           <View style={styles.hero}>
             <Image source={images.ipStar} style={styles.logo} resizeMode="contain" />
             <Text style={styles.heroTitle}>唤醒你的专属 AI</Text>
-            <Text style={styles.heroDesc}>连接微信智能体，开启跨端记忆同步与调度</Text>
+            <Text style={styles.heroDesc}>AI 驱动的第二大脑，开启跨端记忆同步与调度</Text>
           </View>
           <View style={[styles.actions, {paddingBottom: insets.bottom + 40}]}>
-            <TouchableOpacity style={styles.wechatBtn} onPress={guestPath}>
-              <MessageCircle size={22} color="#fff" />
-              <Text style={styles.wechatText}>微信一键授权</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.outlineBtn} onPress={() => setStep('phone')}>
-              <Text style={styles.outlineText}>手机号快捷登录</Text>
+            {/* v1.0：微信一键授权未接真实 OAuth，暂不放出（放出即触发 Sign in with Apple
+                4.8 要求且属未完成功能）。以手机号登录为主入口，游客态见右上「随便看看」。 */}
+            <TouchableOpacity style={styles.ctaBtn} onPress={() => setStep('phone')}>
+              <Text style={styles.ctaText}>手机号快捷登录</Text>
             </TouchableOpacity>
           </View>
         </>
@@ -127,10 +125,13 @@ export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () =
       ) : (
         <View style={[styles.form, styles.center, {paddingTop: insets.top + 16}]}>
           <View style={styles.bindIcon}><LinkIcon size={32} color={colors.textMain} /></View>
-          <Text style={styles.bindTitle}>绑定微信身份</Text>
-          <Text style={styles.bindDesc}>系统检测到该手机号为新用户。{'\n'}为确保跨端智能体记忆池 100% 同步，{'\n'}请绑定你的微信身份。</Text>
-          <TouchableOpacity style={[styles.wechatBtn, {marginTop: 40, alignSelf: 'stretch'}]} onPress={guestPath}>
-            <Text style={styles.wechatText}>去绑定微信</Text>
+          <Text style={styles.bindTitle}>验证码有误</Text>
+          <Text style={styles.bindDesc}>验证码不正确或已过期。{'\n'}你可以重新获取验证码，{'\n'}或先以游客身份体验。</Text>
+          <TouchableOpacity style={[styles.ctaBtn, {marginTop: 40, alignSelf: 'stretch'}]} onPress={() => setStep('phone')}>
+            <Text style={styles.ctaText}>重新登录</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{marginTop: 16}} onPress={guestPath}>
+            <Text style={styles.skipText}>先随便看看</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -148,10 +149,8 @@ const styles = StyleSheet.create({
   heroTitle: {fontSize: 26, fontWeight: '700', color: colors.textMain, marginBottom: 12, letterSpacing: -0.5},
   heroDesc: {fontSize: 15, color: colors.textSub, textAlign: 'center', lineHeight: 22},
   actions: {paddingHorizontal: 24},
-  wechatBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary, height: 56, borderRadius: 16},
-  wechatText: {color: '#fff', fontSize: 16, fontWeight: '700'},
-  outlineBtn: {height: 56, borderRadius: 16, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 16},
-  outlineText: {color: colors.textMain, fontSize: 16, fontWeight: '600'},
+  ctaBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary, height: 56, borderRadius: 16},
+  ctaText: {color: '#fff', fontSize: 16, fontWeight: '700'},
   form: {flex: 1, paddingHorizontal: 24},
   formHead: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 32},
   formTitle: {fontSize: 20, fontWeight: '700', color: colors.textMain},

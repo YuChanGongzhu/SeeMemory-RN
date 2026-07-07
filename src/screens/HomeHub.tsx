@@ -13,7 +13,7 @@ import {useWriteGate} from '../hooks/useWriteGate';
 import {useNav} from '../navigation/nav';
 import {searchMemoryFragments, type MemoryFragment} from '../apis/requests/memory';
 import {HomeFilterSheet, type SortBy, type MediaType} from '../components/HomeFilterSheet';
-import {WELCOME_MEMORY, DAILY_STATUS, HISTORICAL_MEMORIES} from '../data/mock';
+import {WELCOME_MEMORY, DEMO_MEMORIES, DAILY_STATUS, HISTORICAL_MEMORIES} from '../data/mock';
 import type {MemoryCard as MemoryCardModel, TimelineRecord} from '../types/memory';
 
 /** 记忆碎片每页条数：首屏与后续滚动加载共用。 */
@@ -193,6 +193,17 @@ export function HomeHub() {
   // 失败不再用欢迎卡冒充空态：有旧数据则保留，无数据才退化欢迎卡，并置 loadError 让用户可刷新重试。
   const refresh = useCallback(() => {
     if (inFlightRef.current) return;
+    // 游客态（微信一键授权 / 随便看看）：直接展示整套演示记忆，跳过真实接口，
+    // 首页即为丰满的 mock（供截图 / 体验）。与 ArchivePage 的 isGuest→DEMO_ 同款。
+    if (isGuest) {
+      hasDataRef.current = true;
+      hasMoreRef.current = false;
+      setMemories(DEMO_MEMORIES);
+      setIsEmpty(false);
+      setLoadError(false);
+      setLoading(false);
+      return;
+    }
     inFlightRef.current = true;
     setLoading(true);
     setLoadError(false);
@@ -222,7 +233,7 @@ export function HomeHub() {
         inFlightRef.current = false;
         setLoading(false);
       });
-  }, []);
+  }, [isGuest]);
 
   useEffect(() => {
     refresh();
