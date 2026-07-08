@@ -1,4 +1,4 @@
-import React, {useRef} from 'react';
+import React, {useRef, useState} from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   TouchableWithoutFeedback,
   StyleSheet,
 } from 'react-native';
-import {Play, Link as LinkIcon, RefreshCw, Mic, Share2, PenLine, Plus, Trash2} from 'lucide-react-native';
+import {Play, Link as LinkIcon, RefreshCw, Mic, Share2, PenLine, Plus, Trash2, ImageOff} from 'lucide-react-native';
 import {colors, radius, shadow, type as T} from '../design/tokens';
 import type {MemoryCard as MemoryCardModel} from '../types/memory';
 
@@ -31,6 +31,33 @@ function ActionBtn({
       style={[styles.action, {backgroundColor: danger ? colors.dangerSoft : colors.border}]}>
       {children}
     </TouchableOpacity>
+  );
+}
+
+/**
+ * 卡片缩略图：列表里要把整张原图（后端无缩略图变体，url 即原文件）解码进 84×84
+ * 小框，iOS 在长列表里并发解码多张大图时会偶发丢帧 —— 原来没有 onError 兜底，失败
+ * 就只露出容器灰底，于是「有的图能显示有的不能」；而详情页用同一个 url、少量大图
+ * 逐张解码，所以点进去总能看到大图。这里失败时自动重试一次，仍失败才显示占位图标，
+ * 不再留一个会让人误解成「没有图」的空白灰块。参考 ChatPage 的 ChatImage 兜底。
+ */
+function CardThumb({uri}: {uri: string}) {
+  const [attempt, setAttempt] = useState(0);
+  if (attempt >= 2) {
+    return (
+      <View style={styles.thumbFallback}>
+        <ImageOff size={20} color={colors.textSub} />
+      </View>
+    );
+  }
+  return (
+    <Image
+      key={attempt}
+      source={{uri}}
+      style={styles.mediaImg}
+      resizeMode="cover"
+      onError={() => setAttempt(a => a + 1)}
+    />
   );
 }
 
@@ -136,7 +163,7 @@ export function MemoryCard({
 
               {mediaUrl ? (
                 <View style={styles.media}>
-                  <Image source={{uri: mediaUrl}} style={styles.mediaImg} />
+                  <CardThumb uri={mediaUrl} />
                   {isVideo ? (
                     <View style={styles.playOverlay}>
                       <View style={styles.playBtn}>
@@ -231,6 +258,7 @@ const styles = StyleSheet.create({
   audioText: {fontSize: 12, fontWeight: '700', color: colors.textMain},
   media: {width: 84, height: 84, borderRadius: 12, overflow: 'hidden', marginLeft: 16, backgroundColor: colors.bgSecondary},
   mediaImg: {width: '100%', height: '100%'},
+  thumbFallback: {width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center'},
   playOverlay: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
   playBtn: {width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center'},
   countBadge: {position: 'absolute', bottom: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2},

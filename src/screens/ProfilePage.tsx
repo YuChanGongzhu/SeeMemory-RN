@@ -1,5 +1,5 @@
-import React, {useState} from 'react';
-import {View, Text, TextInput, Image, ScrollView, TouchableOpacity, StyleSheet, Alert} from 'react-native';
+import React, {useRef, useState} from 'react';
+import {View, Text, TextInput, Image, ScrollView, TouchableOpacity, Pressable, StyleSheet, Alert} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {ChevronLeft, ChevronRight, PenLine} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
@@ -7,6 +7,9 @@ import {images} from '../design/assets';
 import {useNav} from '../navigation/nav';
 import {useAuth} from '../auth/AuthContext';
 import {usePoints} from '../hooks/usePoints';
+import {EnvSwitchSheet} from '../ui/EnvSwitchSheet';
+
+const APP_VERSION = '0.1.0';
 
 /** 个人信息 — Prototype ProfileSettingsPage (App.jsx:3061). */
 export function ProfilePage() {
@@ -17,6 +20,27 @@ export function ProfilePage() {
   const [name, setName] = useState(user?.nickname || user?.username || '薯饼');
   const account = usePoints();
   const power = account?.balancePoints ?? 0;
+
+  // 隐蔽入口：连点版本号 7 次（1.5s 内）打开后端环境切换面板。
+  const [showEnv, setShowEnv] = useState(false);
+  const tapCount = useRef(0);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onVersionTap = () => {
+    tapCount.current += 1;
+    if (tapTimer.current) {
+      clearTimeout(tapTimer.current);
+    }
+    tapTimer.current = setTimeout(() => {
+      tapCount.current = 0;
+    }, 1500);
+    if (tapCount.current >= 7) {
+      tapCount.current = 0;
+      if (tapTimer.current) {
+        clearTimeout(tapTimer.current);
+      }
+      setShowEnv(true);
+    }
+  };
 
   return (
     <View style={styles.root}>
@@ -84,7 +108,13 @@ export function ProfilePage() {
           onPress={() => Alert.alert('退出登录', '确定要退出当前账号吗？', [{text: '取消', style: 'cancel'}, {text: '退出', style: 'destructive', onPress: () => {nav.home(); void logout();}}])}>
           <Text style={styles.logoutText}>退出登录</Text>
         </TouchableOpacity>
+
+        <Pressable onPress={onVersionTap} style={styles.versionWrap}>
+          <Text style={styles.versionText}>SiMemory v{APP_VERSION}</Text>
+        </Pressable>
       </ScrollView>
+
+      <EnvSwitchSheet visible={showEnv} onClose={() => setShowEnv(false)} />
     </View>
   );
 }
@@ -116,4 +146,6 @@ const styles = StyleSheet.create({
   refillBtnText: {color: '#fff', fontSize: 13, fontWeight: '600'},
   logout: {backgroundColor: colors.bgSecondary, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 8},
   logoutText: {fontSize: 16, fontWeight: '600', color: colors.textMain},
+  versionWrap: {alignItems: 'center', paddingVertical: 24},
+  versionText: {fontSize: 12, color: colors.textSub},
 });

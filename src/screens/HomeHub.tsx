@@ -370,6 +370,7 @@ export function HomeHub() {
                 data={DAILY_STATUS}
                 isGuest={isGuest}
                 onPress={() => (isGuest ? undefined : nav.push('dailyStatus', {data: DAILY_STATUS}))}
+                onOpenHistorical={h => nav.push('historical', {data: h})}
               />
             ) : !isGuest ? (
               <HistoricalCard data={section.historical} onPress={() => nav.push('historical', {data: section.historical})} />

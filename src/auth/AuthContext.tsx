@@ -11,11 +11,13 @@ import React, {
 import {
   clearSession as clearStorageSession,
   getSelectedDevice,
+  getStoredApiEnv,
   getToken,
   saveSelectedDevice,
   saveToken,
   type SelectedDevice,
 } from '../services/storage';
+import {setApiEnvInMemory, type ApiEnv} from '../apis/core/env';
 import {clearAllChatHistory} from '../services/chatHistoryStore';
 import {
   clearSession as clearSessionSingleton,
@@ -116,14 +118,21 @@ export function AuthProvider({children}: {children: ReactNode}) {
       // 置 isHydrated=true，否则 app 永远卡在启动闪屏进不去。失败即当作未登录。
       let token: string | null = null;
       let device: SelectedDevice | null = null;
+      let env: ApiEnv = 'prod';
       try {
-        [token, device] = await Promise.all([getToken(), getSelectedDevice()]);
+        [token, device, env] = await Promise.all([
+          getToken(),
+          getSelectedDevice(),
+          getStoredApiEnv(),
+        ]);
       } catch (err) {
         console.warn('[Auth] session hydrate failed; starting logged-out', err);
       }
       if (!active) {
         return;
       }
+      // 先把后端环境载入内存，保证后续任何请求（含下面的后台刷新）都打对主机。
+      setApiEnvInMemory(env);
       if (token) {
         setAuthToken(token);
         setAuthTokenState(token);

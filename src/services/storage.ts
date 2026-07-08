@@ -1,10 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type {ApiEnv} from '../apis/core/env';
 
 const KEYS = {
   AUTH_TOKEN: '@ringmemory:auth_token',
   USER_ID: '@ringmemory:user_id',
   API_KEY: '@ringmemory:api_key',
   SELECTED_DEVICE: '@ringmemory:selected_device',
+  API_ENV: '@ringmemory:api_env',
 };
 
 export interface SelectedDevice {
@@ -61,6 +63,17 @@ export async function getSelectedDevice(): Promise<SelectedDevice | null> {
   } catch {
     return null;
   }
+}
+
+// 后端环境（dev 隐蔽入口切换）。默认 'prod'；**故意不放进 clearSession**——
+// env 要跨登出存活（切换环境本身会触发登出）。
+export async function saveApiEnv(env: ApiEnv): Promise<void> {
+  await AsyncStorage.setItem(KEYS.API_ENV, env);
+}
+
+export async function getStoredApiEnv(): Promise<ApiEnv> {
+  const val = await AsyncStorage.getItem(KEYS.API_ENV);
+  return val === 'test' ? 'test' : 'prod';
 }
 
 export async function clearSession(): Promise<void> {

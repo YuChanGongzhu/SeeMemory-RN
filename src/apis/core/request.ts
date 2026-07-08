@@ -1,6 +1,5 @@
 import {getAuthToken, getDeviceContext, handleUnauthorized} from './session';
-
-export const BASE_API_URL = 'https://ms.seemem.com/api';
+import {getBaseApiUrl} from './env';
 
 export class BizError extends Error {
   code: number;
@@ -29,7 +28,7 @@ export interface BaseRequestOptions {
 
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  let url = `${BASE_API_URL}${normalizedPath}`;
+  let url = `${getBaseApiUrl()}${normalizedPath}`;
   if (query) {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {

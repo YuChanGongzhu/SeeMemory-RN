@@ -4,17 +4,37 @@ import {Sparkles} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {emoji} from '../design/assets';
 import {GradientBg} from './Gradient';
-import type {DailyStatus} from '../types/memory';
+import type {DailyStatus, HistoricalMemory} from '../types/memory';
 
-const WEEK: {day: string; key?: keyof typeof emoji; type: 'past' | 'today' | 'future'}[] = [
-  {day: '一', key: 'focus', type: 'past'},
-  {day: '二', key: 'fatigue', type: 'past'},
-  {day: '三', key: 'excitement', type: 'past'},
-  {day: '四', key: 'anxiety', type: 'past'},
-  {day: '今日', key: 'focus', type: 'today'},
+// 一周情绪轨迹：过去几天是固定 mock 情绪（各带日期，可点开当日沉淀），「今日」格
+// 不写死，渲染时跟随真实主导情绪变化；周六/日为未来占位。仿原型 DailyStatusCard weekDays。
+const WEEK: {day: string; key?: keyof typeof emoji; type: 'past' | 'today' | 'future'; date?: string}[] = [
+  {day: '一', key: 'focus', type: 'past', date: '2026.06.17'},
+  {day: '二', key: 'fatigue', type: 'past', date: '2026.06.18'},
+  {day: '三', key: 'excitement', type: 'past', date: '2026.06.19'},
+  {day: '四', key: 'anxiety', type: 'past', date: '2026.06.20'},
+  {day: '今日', type: 'today'},
   {day: '六', type: 'future'},
   {day: '日', type: 'future'},
 ];
+
+/** 过去某天的情绪轨迹格 → 该日「每日沉淀」详情（情绪由当天主导表情派生），仿原型 weekDays 点击。 */
+function historicalFromDay(d: (typeof WEEK)[number], i: number): HistoricalMemory {
+  const k = d.key;
+  return {
+    id: `hist_${i}`,
+    date: d.date || '',
+    title: '情绪起伏的日常记录',
+    emotion: {
+      focus: k === 'focus' ? 60 : 20,
+      anxiety: k === 'anxiety' ? 50 : 10,
+      excitement: k === 'excitement' ? 60 : 15,
+      fatigue: k === 'fatigue' ? 55 : 20,
+    },
+    stats: {count: 8 + i, activePeriod: '10:00 - 15:00', weekday: `周${d.day}`, topics: '日常 · 工作'},
+    insight: '偶尔的波动是正常的，保持对生活的感知力。',
+  };
+}
 
 function dominant(e: DailyStatus['emotion']) {
   const max = Math.max(e.focus, e.anxiety, e.excitement, e.fatigue);
@@ -37,7 +57,7 @@ export function MoodCard({
   data: DailyStatus;
   isGuest?: boolean;
   onPress?: () => void;
-  onOpenHistorical?: (day: {day: string; key?: keyof typeof emoji}) => void;
+  onOpenHistorical?: (data: HistoricalMemory) => void;
 }) {
   const dom = dominant(data.emotion);
 
@@ -54,12 +74,14 @@ export function MoodCard({
         {WEEK.map((d, i) => {
           const today = d.type === 'today';
           const future = d.type === 'future';
-          const showEmoji = !isGuest && d.key;
+          // 今日格跟随真实主导情绪（dom），过去几天用固定 mock 表情。
+          const emojiKey = today ? dom.key : d.key;
+          const showEmoji = !isGuest && !!emojiKey;
           return (
             <TouchableOpacity
               key={i}
               activeOpacity={d.type === 'past' ? 0.6 : 1}
-              onPress={() => d.type === 'past' && onOpenHistorical?.(d)}
+              onPress={() => d.type === 'past' && onOpenHistorical?.(historicalFromDay(d, i))}
               style={styles.weekCol}>
               <Text style={[styles.weekDay, today && styles.weekDayToday]}>{d.day}</Text>
               <View
@@ -70,7 +92,7 @@ export function MoodCard({
                   !today && !future && styles.weekDotPast,
                 ]}>
                 {showEmoji ? (
-                  <Image source={emoji[d.key!]} style={{width: 22, height: 22, opacity: d.type === 'past' ? 0.7 : 1}} resizeMode="contain" />
+                  <Image source={emoji[emojiKey!]} style={{width: 22, height: 22, opacity: d.type === 'past' ? 0.7 : 1}} resizeMode="contain" />
                 ) : null}
               </View>
             </TouchableOpacity>

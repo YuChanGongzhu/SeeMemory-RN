@@ -1,10 +1,4 @@
-import {apiRequest} from './api-client';
-import {API_ROUTES, isRouteConfigured} from './api-routes';
 import {baseRequest} from '../apis/core/request';
-
-interface TokenResponse {
-  token: string;
-}
 
 interface UploadResponse {
   status: number;
@@ -250,17 +244,6 @@ export async function uploadFileToCos({
   };
 }
 
-export async function createToken(apiKey: string, username: string): Promise<string> {
-  if (!isRouteConfigured(API_ROUTES.createToken)) {
-    throw new Error('createToken route is not configured yet.');
-  }
-
-  const data = await apiRequest<TokenResponse>(API_ROUTES.createToken, {
-    body: {apiKey, username},
-  });
-  return data.token;
-}
-
 export async function uploadAudioSegment(
   token: string | undefined,
   filePath: string,
@@ -359,12 +342,3 @@ export async function uploadImageFile(
   });
 }
 
-export async function getLatestHistory(token?: string): Promise<any> {
-  if (!isRouteConfigured(API_ROUTES.loadUserLatestHistory)) {
-    return null;
-  }
-
-  return apiRequest<any>(API_ROUTES.loadUserLatestHistory, {
-    authToken: token,
-  });
-}

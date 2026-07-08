@@ -1,6 +1,6 @@
 import EventSource from 'react-native-sse';
 import type {ChatMessage} from '../types/chat';
-import {BASE_API_URL} from '../apis/core/request';
+import {getBaseApiUrl} from '../apis/core/env';
 import {getAuthToken, handleUnauthorized} from '../apis/core/session';
 
 export interface ChatTurn {
@@ -63,7 +63,7 @@ export function streamChat(params: StreamChatParams): StreamHandle {
     return {abort: () => {}};
   }
 
-  const url = `${BASE_API_URL}/app/chat`;
+  const url = `${getBaseApiUrl()}/app/chat`;
   const es = new EventSource(url, {
     method: 'POST',
     headers: {

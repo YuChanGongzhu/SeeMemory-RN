@@ -1,4 +1,4 @@
-import {BASE_API_URL} from '../core/request';
+import {getBaseApiUrl} from '../core/env';
 import {getAuthToken} from '../core/session';
 
 /**
@@ -9,8 +9,6 @@ import {getAuthToken} from '../core/session';
  * 不走 baseRequest（那是 JSON 封装）；multipart 用 fetch 直发，参考 services/api.ts 里的
  * transcribeAudioFile 写法。
  */
-
-const ASR_ENDPOINT = `${BASE_API_URL}/app/audio/transcriptions`;
 
 function normalizeFileUri(filePath: string): string {
   return filePath.startsWith('file://') ? filePath : `file://${filePath}`;
@@ -50,7 +48,7 @@ export async function transcribeVoice({
     form.append('language', language);
   }
 
-  const response = await fetch(ASR_ENDPOINT, {
+  const response = await fetch(`${getBaseApiUrl()}/app/audio/transcriptions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
