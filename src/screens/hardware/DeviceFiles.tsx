@@ -276,7 +276,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
       <IosAlert
         visible={wifiAsk}
         onClose={() => setWifiAsk(false)}
-        title={`“iMemory”想加入无线局域网“${connectedDevice?.name || 'MR20'}”吗？`}
+        title={`“SiMemory”想加入无线局域网“${connectedDevice?.name || 'MR20'}”吗？`}
         message="加入设备热点后可高速直传选中的录音，比蓝牙快约 10 倍。传输结束会自动断开热点。"
         buttons={[
           {text: '取消', onPress: () => setWifiAsk(false)},

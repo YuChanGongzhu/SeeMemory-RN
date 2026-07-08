@@ -300,7 +300,7 @@ export function MemoryDetail() {
               <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
                 <Sparkles size={16} color={colors.textMain} />
                 <View>
-                  <Text style={styles.posterBrand}>imemory</Text>
+                  <Text style={styles.posterBrand}>SiMemory</Text>
                   <Text style={styles.posterSlogan}>咱们今天经历了什么</Text>
                 </View>
               </View>

@@ -1,5 +1,5 @@
 /**
- * imemory - AI Memory Assistant
+ * SiMemory - AI Memory Assistant
  * Faithful RN port of the app-prototype UI (single light iOS-style theme,
  * hub-and-spoke navigation: Home hub + FAB capsule + global drawer).
  */

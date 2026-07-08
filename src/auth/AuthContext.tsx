@@ -112,7 +112,15 @@ export function AuthProvider({children}: {children: ReactNode}) {
   useEffect(() => {
     let active = true;
     (async () => {
-      const [token, device] = await Promise.all([getToken(), getSelectedDevice()]);
+      // 读本地存储可能失败（如全新模拟器首启 AsyncStorage 未就绪）。无论成败都要
+      // 置 isHydrated=true，否则 app 永远卡在启动闪屏进不去。失败即当作未登录。
+      let token: string | null = null;
+      let device: SelectedDevice | null = null;
+      try {
+        [token, device] = await Promise.all([getToken(), getSelectedDevice()]);
+      } catch (err) {
+        console.warn('[Auth] session hydrate failed; starting logged-out', err);
+      }
       if (!active) {
         return;
       }
