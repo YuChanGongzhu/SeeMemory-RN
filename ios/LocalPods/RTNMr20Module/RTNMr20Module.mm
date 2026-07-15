@@ -49,6 +49,9 @@ RCT_EXTERN_METHOD(deleteRelativePath:(NSString *)relativePath
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(getDocumentsDir:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(wifiJoin:(NSString *)ssid
                   pwd:(NSString *)pwd
                   timeoutMs:(double)timeoutMs

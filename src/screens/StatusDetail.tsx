@@ -1,10 +1,11 @@
-import React from 'react';
-import {View, Text, Image, ScrollView, TouchableOpacity, StyleSheet} from 'react-native';
+import React, {useState} from 'react';
+import {View, Text, Image, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {ChevronLeft, Archive, ChevronRight} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {emoji} from '../design/assets';
 import {useNav} from '../navigation/nav';
+import {loadEventDrillCard} from '../apis/mappers/fragment';
 import type {DailyStatus, HistoricalMemory} from '../types/memory';
 
 const EMO = [
@@ -13,8 +14,6 @@ const EMO = [
   {label: '兴奋', key: 'excitement' as const, color: '#FFCC00'},
   {label: '疲惫', key: 'fatigue' as const, color: '#8E8E93'},
 ];
-const HEAT = [2, 5, 10, 25, 40, 80, 60, 30, 10, 5, 20, 50, 90, 70, 40, 20, 5, 2];
-
 function dominant(e: DailyStatus['emotion']): keyof typeof emoji {
   const max = Math.max(e.focus, e.anxiety, e.excitement, e.fatigue);
   if (max === e.focus) return 'focus';
@@ -30,6 +29,8 @@ function dominant(e: DailyStatus['emotion']): keyof typeof emoji {
 export function StatusDetail({dark}: {dark?: boolean}) {
   const nav = useNav();
   const insets = useSafeAreaInsets();
+  const [drilling, setDrilling] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const data: DailyStatus | HistoricalMemory = nav.current.params?.data;
   if (!data) return <View style={{flex: 1, backgroundColor: dark ? colors.darkCard : colors.bg}} />;
 
@@ -39,6 +40,37 @@ export function StatusDetail({dark}: {dark?: boolean}) {
   const track = dark ? 'rgba(255,255,255,0.1)' : colors.bgSecondary;
   const fill = dark ? '#fff' : colors.textMain;
   const topics = data.stats.topics.split(/[·,]/).map(t => t.trim()).filter(Boolean);
+
+  // 真实活跃热力（24 小时原始计数 → 归一到 0-100 高度）；无数据时显示空态，不再回落示例。
+  const rawHeat = 'heatmap' in data ? data.heatmap : undefined;
+  const hasHeat = !!(rawHeat && rawHeat.some(h => h > 0));
+  const heatBars: number[] = hasHeat
+    ? (() => {
+        const max = Math.max(...rawHeat!, 1);
+        return rawHeat!.map(h => Math.round((h / max) * 100));
+      })()
+    : [];
+  // 真实事件回溯（今日卡才有）；无数据时显示空态，不再回落内置示例。
+  const realRecall = 'eventRecall' in data ? data.eventRecall : undefined;
+
+  const flash = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2000);
+  };
+  // 钻取源文件：拉取该事件组的碎片合并成一张卡，打开详情页；无源/失败给 toast，不跳转。
+  const openDrill = async (r: NonNullable<DailyStatus['eventRecall']>[number], i: number) => {
+    if (drilling !== null) return;
+    setDrilling(i);
+    try {
+      const card = await loadEventDrillCard(r);
+      if (card) nav.push('memoryDetail', {card});
+      else flash('暂无可钻取的源文件');
+    } catch {
+      flash('加载失败，请稍后重试');
+    } finally {
+      setDrilling(null);
+    }
+  };
 
   return (
     <View style={{flex: 1, backgroundColor: dark ? colors.darkCard : colors.bg}}>
@@ -96,16 +128,22 @@ export function StatusDetail({dark}: {dark?: boolean}) {
 
         {/* Heatmap */}
         <Text style={[styles.sectionLabel, {color: sub, marginBottom: 20}]}>活跃热力分布</Text>
-        <View style={styles.heat}>
-          {HEAT.map((h, i) => (
-            <View key={i} style={[styles.heatBar, {height: `${h}%`, backgroundColor: h > 50 ? fill : h > 20 ? (dark ? 'rgba(255,255,255,0.3)' : 'rgba(26,26,26,0.3)') : (dark ? 'rgba(255,255,255,0.08)' : 'rgba(26,26,26,0.06)')}]} />
-          ))}
-        </View>
-        <View style={styles.heatAxis}>
-          <Text style={[styles.axisText, {color: sub}]}>08:00</Text>
-          <Text style={[styles.axisText, {color: sub}]}>14:00</Text>
-          <Text style={[styles.axisText, {color: sub}]}>22:00</Text>
-        </View>
+        {hasHeat ? (
+          <>
+            <View style={styles.heat}>
+              {heatBars.map((h, i) => (
+                <View key={i} style={[styles.heatBar, {height: `${h}%`, backgroundColor: h > 50 ? fill : h > 20 ? (dark ? 'rgba(255,255,255,0.3)' : 'rgba(26,26,26,0.3)') : (dark ? 'rgba(255,255,255,0.08)' : 'rgba(26,26,26,0.06)')}]} />
+              ))}
+            </View>
+            <View style={styles.heatAxis}>
+              <Text style={[styles.axisText, {color: sub}]}>08:00</Text>
+              <Text style={[styles.axisText, {color: sub}]}>14:00</Text>
+              <Text style={[styles.axisText, {color: sub}]}>22:00</Text>
+            </View>
+          </>
+        ) : (
+          <Text style={[styles.recallEmpty, {color: sub}]}>今天还没有足够的活跃数据</Text>
+        )}
 
         {/* Word cloud */}
         <Text style={[styles.sectionLabel, {color: sub, marginTop: 40, marginBottom: 16}]}>高频思维词云</Text>
@@ -117,34 +155,50 @@ export function StatusDetail({dark}: {dark?: boolean}) {
           ))}
         </View>
 
-        {/* Event recall (today only) */}
+        {/* Event recall (today only) — 真实事件回溯；无数据显示空态，不再回落示例 */}
         {!dark ? (
           <>
             <Text style={[styles.sectionLabel, {color: sub, marginTop: 40, marginBottom: 16}]}>事件回溯与源文件钻取</Text>
-            <View style={{gap: 16}}>
-              {[
-                {id: 'g1', range: '10:30 – 12:00', title: '关于商业模式的深入探讨', count: 4},
-                {id: 'g2', range: '14:00 – 15:30', title: 'UI/UX 设计方向确定', count: 2},
-              ].map(g => (
-                <View key={g.id} style={styles.recall}>
-                  <View style={{flex: 1}}>
-                    <Text style={styles.recallRange}>{g.range}</Text>
-                    <Text style={styles.recallTitle}>{g.title}</Text>
-                    <View style={styles.recallBadge}>
-                      <Archive size={12} color={colors.textSub} />
-                      <Text style={styles.recallBadgeText}>包含 {g.count} 个记忆碎片</Text>
+            {realRecall && realRecall.length ? (
+              <View style={{gap: 16}}>
+                {realRecall.map((r, i) => (
+                  <TouchableOpacity
+                    key={`r${i}`}
+                    style={styles.recall}
+                    activeOpacity={0.7}
+                    disabled={drilling !== null}
+                    onPress={() => openDrill(r, i)}>
+                    <View style={{flex: 1}}>
+                      <Text style={styles.recallRange}>{r.time_range}</Text>
+                      <Text style={styles.recallTitle}>{r.title}</Text>
+                      <View style={styles.recallBadge}>
+                        <Archive size={12} color={colors.textSub} />
+                        <Text style={styles.recallBadgeText}>包含 {r.count} 个记忆碎片</Text>
+                      </View>
                     </View>
-                  </View>
-                  <View style={styles.recallChevron}>
-                    <ChevronRight size={18} color={colors.textMain} />
-                  </View>
-                </View>
-              ))}
-            </View>
+                    <View style={styles.recallChevron}>
+                      {drilling === i ? (
+                        <ActivityIndicator size="small" color={colors.textMain} />
+                      ) : (
+                        <ChevronRight size={18} color={colors.textMain} />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.recallEmpty}>今天还没有可回溯的事件</Text>
+            )}
           </>
         ) : null}
         <View style={{height: 60}} />
       </ScrollView>
+
+      {toast ? (
+        <View style={[styles.toast, {bottom: insets.bottom + 60}]}>
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -183,4 +237,7 @@ const styles = StyleSheet.create({
   recallBadge: {flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: colors.bgSecondary, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6},
   recallBadgeText: {fontSize: 11, color: colors.textMain, fontWeight: '600'},
   recallChevron: {width: 36, height: 36, borderRadius: 18, backgroundColor: colors.bgSecondary, alignItems: 'center', justifyContent: 'center'},
+  recallEmpty: {fontSize: 14, color: colors.textSub, lineHeight: 22},
+  toast: {position: 'absolute', alignSelf: 'center', backgroundColor: 'rgba(26,26,26,0.92)', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 14},
+  toastText: {color: '#fff', fontSize: 14, fontWeight: '500'},
 });

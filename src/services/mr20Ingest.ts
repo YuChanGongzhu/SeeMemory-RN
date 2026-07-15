@@ -10,6 +10,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {uploadAudioSegment} from './api';
+import {resolveLocalPath} from './mr20Sync';
 import {AudioFileResult} from './audioBatch';
 import {fileEpoch, itemEpoch, batchDate} from './mr20FileTime';
 
@@ -181,8 +182,11 @@ export async function uploadSyncedFile(item: Mr20InboxItem): Promise<Mr20InboxIt
   if (!audioUrl) {
     const ts = Date.now();
     const durationMs = Math.max(0, Math.round((item.seconds || 0) * 1000));
+    // 用现算的本地绝对路径（当前 Documents + 相对路径），不信任持久化的 item.localPath——
+    // 容器 UUID 会随重装/恢复变化导致旧绝对路径失效（读取本地录音失败）。
+    const localPath = await resolveLocalPath(item);
     const res = await withRetry(() =>
-      uploadAudioSegment(undefined, item.localPath, durationMs, ts),
+      uploadAudioSegment(undefined, localPath, durationMs, ts),
     );
     audioUrl = res.result?.objectUrl as string | undefined;
     if (!audioUrl) {
@@ -232,12 +236,14 @@ export async function applyBatchResult(
     }
   }
   let hit = 0;
+  let changed = 0;
   for (const it of items) {
     const r = byName.get(batchFileName(it));
     if (!r) {
       continue;
     }
     hit += 1;
+    const before = `${it.status}|${it.transcript ?? ''}|${it.error ?? ''}|${it.batchGroupId ?? ''}`;
     it.batchGroupId = groupId;
     if (r.status === 'failed') {
       it.status = 'error';
@@ -247,7 +253,14 @@ export async function applyBatchResult(
       it.status = 'done';
       it.error = undefined;
     }
+    const after = `${it.status}|${it.transcript ?? ''}|${it.error ?? ''}|${it.batchGroupId ?? ''}`;
+    if (before !== after) {
+      changed += 1;
+    }
   }
-  await writeInbox(items);
+  // 轮询中会反复以部分结果调用本函数，无变化时跳过写盘，避免每 tick 都刷 AsyncStorage。
+  if (changed > 0) {
+    await writeInbox(items);
+  }
   return hit;
 }

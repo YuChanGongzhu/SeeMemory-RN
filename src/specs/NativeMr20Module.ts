@@ -35,6 +35,10 @@ export interface Spec extends TurboModule {
   // 删除 Documents 下某相对路径（文件或目录），不存在视为成功
   deleteRelativePath(relativePath: string): Promise<void>;
 
+  // 返回当前沙盒 Documents 绝对路径。读取端据此 + 相对路径现算，避免持久化
+  // 的绝对路径因容器 UUID 变化（重装/恢复）而失效。
+  getDocumentsDir(): Promise<string>;
+
   // ============ WiFi 快传 ============
   // 程序化加入设备热点（iOS NEHotspotConfiguration / Android WifiNetworkSpecifier）。
   // 系统会弹一次确认框。成功 resolve true；被拒/超时 resolve false（上层降级到引导手动连接）。

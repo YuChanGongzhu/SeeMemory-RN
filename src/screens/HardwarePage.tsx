@@ -41,6 +41,7 @@ import {useNav} from '../navigation/nav';
 import {useMr20} from '../hooks/useMr20';
 import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
+import {resolveLocalPath} from '../services/mr20Sync';
 import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../services/mediaFormat';
 import {IosAlert, SubHeader, HW, type HwSubPage} from './hardware/parts';
 import {DeviceSettings} from './hardware/DeviceSettings';
@@ -133,6 +134,7 @@ export function HardwarePage() {
     connectAndPair,
     disconnect,
     syncNow,
+    syncSelected,
     refreshDeviceFiles,
     processItems,
     deleteItems,
@@ -145,7 +147,10 @@ export function HardwarePage() {
   const [subPage, setSubPage] = useState<HwSubPage>('main');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null); // 展开查看某天录音
   const [uploadSel, setUploadSel] = useState<Set<string>>(new Set()); // 当天录音的批量上传勾选
+  // 重新处理模式：勾选「已归档(done)」录音重新聚合成新 group（后端复用已有转写、不重跑 ASR）。
+  const [reprocessMode, setReprocessMode] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<Mr20InboxItem | null>(null); // 查看录音转写全文
   const [disconnectAsk, setDisconnectAsk] = useState(false);
   const [unbindAsk, setUnbindAsk] = useState(false);
   const [alias, setAlias] = useState('');
@@ -187,14 +192,20 @@ export function HardwarePage() {
     };
   }, [connected, refreshStatus, refreshDeviceFiles]);
 
-  // 成功态闪现：连上后短暂显示绿勾再进 dashboard。
+  // 成功态闪现：仅在「本页在场时真正从未连接→连上」才短暂显示绿勾。
+  // 若进入本页时设备已连着（如首页自动重连后再进来），不应再闪一次「连接成功」。
+  const prevConnectedRef = useRef(connected);
   useEffect(() => {
-    if (connected) {
+    const was = prevConnectedRef.current;
+    prevConnectedRef.current = connected;
+    if (connected && !was) {
       setShowSuccess(true);
       const t = setTimeout(() => setShowSuccess(false), 1400);
       return () => clearTimeout(t);
     }
-    setShowSuccess(false);
+    if (!connected) {
+      setShowSuccess(false);
+    }
   }, [connected]);
 
   // 自动下载：开启且有待同步文件时，连上后自动同步一次。
@@ -257,12 +268,42 @@ export function HardwarePage() {
   );
 
   const onPlay = useCallback(
-    (item: Mr20InboxItem) => {
-      playback.toggle(item.id, item.localPath).catch(e =>
-        Alert.alert('播放失败', String((e as Error)?.message || e)),
-      );
+    async (item: Mr20InboxItem) => {
+      // 现算本地绝对路径（当前 Documents + 相对路径），不信任持久化的 localPath。
+      const path = await resolveLocalPath(item);
+      playback.toggle(item.id, path).catch(() => {
+        // 播放失败多为本地文件缺失/损坏/半包：给出从设备重传覆盖的补救路径（无 exists 探测，错误驱动）。
+        if (connState !== 'connected') {
+          Alert.alert(
+            '无法播放',
+            '本地录音文件缺失或损坏。请先连接记忆粒，再从「设备文件」重新传输以覆盖本地。',
+          );
+          return;
+        }
+        Alert.alert('无法播放', '本地录音文件缺失或损坏，是否从设备重新传输并覆盖？', [
+          {text: '取消', style: 'cancel'},
+          {
+            text: '重新传输',
+            onPress: async () => {
+              try {
+                await syncSelected([
+                  {
+                    dir: item.dir,
+                    fname: item.fname,
+                    seconds: item.seconds,
+                    size: item.sizeBytes ?? 0,
+                  },
+                ]);
+                await playback.toggle(item.id, await resolveLocalPath(item));
+              } catch (e) {
+                Alert.alert('播放失败', String((e as Error)?.message || e));
+              }
+            },
+          },
+        ]);
+      });
     },
-    [playback],
+    [playback, connState, syncSelected],
   );
 
   const confirmDelete = useCallback(
@@ -355,20 +396,37 @@ export function HardwarePage() {
             <Play size={18} color={HW.blue} fill={HW.blue} />
           )}
         </TouchableOpacity>
-        <View style={st.flex1}>
+        <TouchableOpacity
+          style={st.flex1}
+          activeOpacity={0.6}
+          onPress={() => setDetailItem(item)}>
           <Text style={st.recTitle} numberOfLines={1}>
-            {item.transcript?.trim() || `录音 ${clock(itemEpoch(item))}`}
+            {item.transcript?.trim() ||
+              (item.status === 'queued'
+                ? '转写中…'
+                : `录音 ${clock(itemEpoch(item))}`)}
           </Text>
           <Text style={st.recMeta}>
             {clockSec(itemEpoch(item))} · 时长 {fmtHuman(item.seconds)}
             {item.sizeBytes ? ` · ${fmtMB(item.sizeBytes)}` : ''}
           </Text>
-        </View>
+        </TouchableOpacity>
         {isProcessing ? (
           <ActivityIndicator size="small" color={HW.blue} />
         ) : (
           <View style={st.recActions}>
-            {archived ? (
+            {reprocessMode ? (
+              // 重新处理模式：只有已归档(done)项可勾选重新聚合；其余项不可选。
+              archived ? (
+                <TouchableOpacity
+                  style={st.recActionBtn}
+                  onPress={() => toggleUploadSel(item.id)}>
+                  <View style={[st.checkbox, selected && st.checkboxOn]}>
+                    {selected ? <Check size={13} color="#fff" strokeWidth={3} /> : null}
+                  </View>
+                </TouchableOpacity>
+              ) : null
+            ) : archived ? (
               <View style={st.localTag}>
                 <Check size={15} color={HW.textSub} strokeWidth={3} />
                 <Text style={st.localTagText}>已归档</Text>
@@ -391,27 +449,87 @@ export function HardwarePage() {
     );
   };
 
+  // 录音转写全文弹层：主页面和「某天录音」子页都渲染（子页是提前 return 的独立
+  // 分支，只放在主页面 JSX 里会导致子页点卡片后要退回主页弹层才出现）。
+  const transcriptSheet = (
+    <BottomSheet
+      visible={!!detailItem}
+      onClose={() => setDetailItem(null)}
+      title="录音转写">
+      {detailItem ? (
+        <>
+          <Text style={st.detailMeta}>
+            {dayFull(itemEpoch(detailItem))} {clockSec(itemEpoch(detailItem))} ·
+            时长 {fmtHuman(detailItem.seconds)}
+            {detailItem.sizeBytes ? ` · ${fmtMB(detailItem.sizeBytes)}` : ''}
+          </Text>
+          <ScrollView
+            style={st.detailScroll}
+            contentContainerStyle={st.detailScrollBody}
+            showsVerticalScrollIndicator>
+            {detailItem.transcript?.trim() ? (
+              <Text style={st.detailText} selectable>
+                {detailItem.transcript.trim()}
+              </Text>
+            ) : detailItem.status === 'queued' ? (
+              <Text style={st.detailPlaceholder}>转写中…请稍候</Text>
+            ) : detailItem.status === 'error' ? (
+              <Text style={st.detailPlaceholder}>
+                转写失败：{detailItem.error || '未知错误'}
+              </Text>
+            ) : (
+              <Text style={st.detailPlaceholder}>暂无转写文本</Text>
+            )}
+          </ScrollView>
+          <TouchableOpacity
+            style={st.detailPlayBtn}
+            activeOpacity={0.8}
+            onPress={() => onPlay(detailItem)}>
+            {playback.playingId === detailItem.id ? (
+              <Pause size={18} color="#fff" fill="#fff" />
+            ) : (
+              <Play size={18} color="#fff" fill="#fff" />
+            )}
+            <Text style={st.detailPlayText}>
+              {playback.playingId === detailItem.id ? '暂停' : '播放录音'}
+            </Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
+    </BottomSheet>
+  );
+
   // ---- 子页路由（原型 activeSubPage 状态机） ----
   // 某天录音子页（原型 date_recordings）：从折叠日期行点进来。
   if (selectedDayKey) {
     const group = groups.find(g => g.key === selectedDayKey);
     const dayItems = group?.items ?? [];
-    const uploadables = dayItems.filter(isUploadable);
-    const selCount = uploadables.filter(i => uploadSel.has(i.id)).length;
-    const allSel = uploadables.length > 0 && selCount === uploadables.length;
+    // 普通模式选未处理项做首次上传；重新处理模式选已归档(done)项重新聚合。两种互斥。
+    const reprocessables = dayItems.filter(i => i.status === 'done');
+    const activeSet = reprocessMode
+      ? reprocessables
+      : dayItems.filter(isUploadable);
+    const selCount = activeSet.filter(i => uploadSel.has(i.id)).length;
+    const allSel = activeSet.length > 0 && selCount === activeSet.length;
     const closeDay = () => {
       setUploadSel(new Set());
+      setReprocessMode(false);
       setSelectedDayKey(null);
     };
-    const toggleAllUpload = () =>
-      setUploadSel(allSel ? new Set() : new Set(uploadables.map(i => i.id)));
-    const uploadSelected = () => {
-      const chosen = uploadables.filter(i => uploadSel.has(i.id));
+    const toggleReprocessMode = () => {
+      setUploadSel(new Set());
+      setReprocessMode(m => !m);
+    };
+    const toggleAllActive = () =>
+      setUploadSel(allSel ? new Set() : new Set(activeSet.map(i => i.id)));
+    const submitSelected = () => {
+      const chosen = activeSet.filter(i => uploadSel.has(i.id));
       if (!chosen.length) {
         return;
       }
       setUploadSel(new Set());
-      // 一次性上传并提交为同一个批次（/app/audio/batch）。
+      setReprocessMode(false);
+      // 一次性提交为同一个批次（/app/audio/batch）；重新处理时 payload 带 transcript，后端复用不重跑 ASR。
       processItems(chosen).catch(() => undefined);
     };
     return (
@@ -420,31 +538,54 @@ export function HardwarePage() {
           title={group ? dayFull(itemEpoch(group.items[0])) : '录音'}
           onBack={closeDay}
           right={
-            uploadables.length ? (
-              <TouchableOpacity
-                onPress={toggleAllUpload}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                <Text style={st.selectAllText}>{allSel ? '取消全选' : '全选'}</Text>
-              </TouchableOpacity>
+            reprocessables.length || activeSet.length ? (
+              <View style={st.dayHeadActions}>
+                {reprocessables.length ? (
+                  <TouchableOpacity
+                    onPress={toggleReprocessMode}
+                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                    <Text style={st.selectAllText}>
+                      {reprocessMode ? '完成' : '重新处理'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                {activeSet.length ? (
+                  <TouchableOpacity
+                    onPress={toggleAllActive}
+                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                    <Text style={st.selectAllText}>{allSel ? '取消全选' : '全选'}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             ) : undefined
           }
         />
+        {reprocessMode ? (
+          <Text style={st.reprocessHint}>
+            勾选已归档录音重新归入一个新场景（复用已有转写，不重复消耗转写额度）。
+          </Text>
+        ) : null}
         <ScrollView
           contentContainerStyle={[st.pairedBody, selCount > 0 && st.pairedBodyPad]}
           showsVerticalScrollIndicator={false}>
           {dayItems.length ? (
-            <View style={{gap: 12}}>{dayItems.map(renderRecCard)}</View>
+            <View style={st.dayList}>{dayItems.map(renderRecCard)}</View>
           ) : (
             <Text style={st.empty}>这天的录音已清空。</Text>
           )}
         </ScrollView>
         {selCount > 0 ? (
           <View style={st.footer}>
-            <TouchableOpacity style={st.startBtn} onPress={uploadSelected}>
-              <Text style={st.startBtnText}>上传选中（{selCount} 段）</Text>
+            <TouchableOpacity style={st.startBtn} onPress={submitSelected}>
+              <Text style={st.startBtnText}>
+                {reprocessMode
+                  ? `重新处理（${selCount} 段）`
+                  : `上传选中（${selCount} 段）`}
+              </Text>
             </TouchableOpacity>
           </View>
         ) : null}
+        {transcriptSheet}
         <TransferBadge />
       </View>
     );
@@ -750,6 +891,9 @@ export function HardwarePage() {
         </TouchableOpacity>
       </BottomSheet>
 
+      {/* 录音转写全文（transcriptSheet 定义在子页路由前，两个分支共用） */}
+      {transcriptSheet}
+
       {/* 断开确认 */}
       <IosAlert
         visible={disconnectAsk}
@@ -829,6 +973,9 @@ const st = StyleSheet.create({
   pairedBody: {padding: 20},
   pairedBodyPad: {paddingBottom: 110},
   selectAllText: {fontSize: 15, color: HW.blue, fontWeight: '600'},
+  dayHeadActions: {flexDirection: 'row', alignItems: 'center', gap: 16},
+  dayList: {gap: 12},
+  reprocessHint: {fontSize: 12, color: HW.textSub, lineHeight: 18, paddingHorizontal: 20, paddingTop: 12},
   checkbox: {width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: HW.textTertiary, alignItems: 'center', justifyContent: 'center'},
   checkboxOn: {backgroundColor: HW.blue, borderColor: HW.blue},
   footer: {position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 12, backgroundColor: 'rgba(249,249,251,0.96)', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HW.divider},
@@ -901,4 +1048,12 @@ const st = StyleSheet.create({
   sheetRow: {paddingVertical: 16, alignItems: 'center', justifyContent: 'center'},
   sheetRowBorder: {borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: HW.divider},
   sheetRowText: {fontSize: 17, color: HW.textMain},
+  // 转写全文弹层
+  detailMeta: {fontSize: 13, color: HW.textSub, fontWeight: '500', marginBottom: 12},
+  detailScroll: {maxHeight: 320, backgroundColor: HW.card, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
+  detailScrollBody: {padding: 16},
+  detailText: {fontSize: 16, lineHeight: 26, color: HW.textMain, letterSpacing: -0.2},
+  detailPlaceholder: {fontSize: 15, color: HW.textSub, textAlign: 'center', paddingVertical: 24},
+  detailPlayBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: HW.blue, borderRadius: 14, paddingVertical: 14, marginTop: 16},
+  detailPlayText: {fontSize: 16, fontWeight: '600', color: '#fff'},
 });

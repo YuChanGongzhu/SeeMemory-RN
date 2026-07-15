@@ -40,6 +40,7 @@ export const Mr20Native: Spec =
     monitor: unavailable,
     writeBase64File: unavailable,
     deleteRelativePath: async () => {},
+    getDocumentsDir: unavailable,
     wifiJoin: async () => false,
     wifiLeave: async () => {},
     wifiConnect: unavailable,

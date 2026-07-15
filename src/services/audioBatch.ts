@@ -22,6 +22,8 @@ export interface AudioBatchInput {
   fileName: string;
   /** 音频时长（毫秒，设备端已知）。后端优先采用，缺省时回退 ASR 时长。 */
   durationMs?: number;
+  /** 已有转写（可选）：重新聚合已转写录音时带上，后端直接复用、跳过下载+ASR，不耗转写额度。 */
+  transcription?: string;
 }
 
 export interface BatchGroupResult {

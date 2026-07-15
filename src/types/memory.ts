@@ -58,6 +58,9 @@ export interface DailyStatus {
   emotion: Emotion;
   stats: {count: number; diff: string; activePeriod: string; topics: string};
   insight: string;
+  // 真实数据（来自 mood 接口 detail）；缺省时详情页回落内置示例。
+  heatmap?: number[];
+  eventRecall?: {time_range: string; title: string; count: number; event_ids?: string[]; fragment_ids?: string[]}[];
 }
 
 export interface Todo {
@@ -99,4 +102,5 @@ export interface HistoricalMemory {
   emotion: Emotion;
   stats: {count: number; activePeriod: string; weekday: string; topics: string};
   insight: string;
+  heatmap?: number[];
 }

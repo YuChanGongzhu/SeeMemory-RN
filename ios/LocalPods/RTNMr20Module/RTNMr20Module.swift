@@ -7,7 +7,8 @@ import Network
 /// 单次 WiFi 快传的上下文：TCP 连接 + 落盘句柄 + 收流计数 + connect/receive 两段回调。
 /// 「先连后收」两步共享它（wifiConnect 建连接，wifiReceiveFile 在其上收流）。
 private final class WifiXfer {
-  let conn: NWConnection
+  // 连接阶段可能重试多次（DHCP 未就绪→重建连接），故 conn 可替换。
+  var conn: NWConnection?
   var connSettled = false
   var connResolve: RCTPromiseResolveBlock?
   var connReject: RCTPromiseRejectBlock?
@@ -19,7 +20,7 @@ private final class WifiXfer {
   var recvResolve: RCTPromiseResolveBlock?
   var recvReject: RCTPromiseRejectBlock?
   var filePath = ""
-  init(_ conn: NWConnection) { self.conn = conn }
+  init() {}
 }
 
 /// MR20「记忆粒」通用 BLE 原语（CoreBluetooth）。不含 GJJY 协议逻辑——
@@ -226,6 +227,18 @@ class RTNMr20Module: RCTEventEmitter {
     }
   }
 
+  /// 返回当前沙盒 Documents 绝对路径。读取端据此 + 相对路径现算绝对路径，
+  /// 避免持久化的绝对路径因容器 UUID 变化（重装/恢复）而失效。
+  @objc(getDocumentsDir:reject:)
+  func getDocumentsDir(_ resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+      reject("FILE_ERR", "无法定位 Documents 目录", nil)
+      return
+    }
+    resolve(docs.path)
+  }
+
   // MARK: - WiFi 快传（NEHotspotConfiguration 入网 + Network.framework 收流）
 
   /// 程序化加入设备热点。系统弹一次确认框；已关联也视为成功。失败 resolve(false)，
@@ -269,29 +282,59 @@ class RTNMr20Module: RCTEventEmitter {
   func wifiAbort(_ transferId: String,
                  resolve: @escaping RCTPromiseResolveBlock,
                  reject _: @escaping RCTPromiseRejectBlock) {
-    wifiXfers[transferId]?.conn.cancel()
+    if let xfer = wifiXfers[transferId] {
+      xfer.connSettled = true // 阻止重试循环在 abort 后继续重连
+      xfer.conn?.cancel()
+      // 批末关闭（无进行中收流）：直接清理，避免长连接方案下 xfer 逐批累积；
+      // 有进行中收流时保留，交给 .cancelled → failRecv 拒绝该文件并清理。
+      if xfer.recvResolve == nil && xfer.recvReject == nil {
+        wifiXfers.removeValue(forKey: transferId)
+      }
+    }
     resolve(nil)
   }
 
-  /// 先建立到 host:port 的 TCP 连接（**必须早于 BLE 下发 W 指令**，否则设备推的字节丢失卡 0）。
-  /// socket ready 即 resolve；失败/8s 超时 reject。连接句柄按 transferId 暂存供收流。
-  /// requiredInterfaceType=.wifi 强制走设备热点。
+  /// 建立到 host:port 的 TCP 连接（**必须早于 BLE 下发 W 指令**，否则设备推的字节丢失卡 0）。
+  /// socket ready 即 resolve。
+  ///
+  /// ⚠️ DHCP 竞态（0703 固件反馈报告核心）：`wifiJoin`(NEHotspotConfiguration) 在热点**关联成功即返回**，
+  /// 但此刻手机尚未从设备 AP 拿到 `192.168.200.x` 地址；过早连 socket 会 `.failed`/超时收 0 字节，
+  /// 表现为「有些记忆粒连接不上」。故这里在总窗口内**退避重试**建连，等 DHCP 就绪后 socket 自然 ready。
+  /// requiredInterfaceType=.wifi 强制走设备热点（避免走蜂窝）。
   @objc(wifiConnect:port:transferId:resolve:reject:)
   func wifiConnect(_ host: String,
                    port: Double,
                    transferId: String,
                    resolve: @escaping RCTPromiseResolveBlock,
                    reject: @escaping RCTPromiseRejectBlock) {
-    let params = NWParameters.tcp
-    params.requiredInterfaceType = .wifi
-    let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8475
-    let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
-    let xfer = WifiXfer(conn)
+    let nwHost = Network.NWEndpoint.Host(host)
+    let nwPort = Network.NWEndpoint.Port(rawValue: UInt16(port)) ?? 8475
+
+    let xfer = WifiXfer()
     xfer.connResolve = resolve
     xfer.connReject = reject
     wifiXfers[transferId] = xfer
 
+    // 总窗口 25s：覆盖热点关联 + DHCP 拿到 192.168.200.x + 设备 socket 起监听的最坏耗时。
+    let deadline = DispatchTime.now() + 25
+    attemptWifiConnect(transferId, host: nwHost, port: nwPort, deadline: deadline)
+  }
+
+  /// 单次建连尝试；`.failed` 时在 deadline 内退避 1s 重试，`.waiting`（暂无路由/DHCP 未就绪）
+  /// 交给 NWConnection 自行等待恢复，仅由 deadline 兜底超时。
+  private func attemptWifiConnect(_ transferId: String,
+                                  host: Network.NWEndpoint.Host,
+                                  port: Network.NWEndpoint.Port,
+                                  deadline: DispatchTime) {
+    guard let xfer = wifiXfers[transferId], !xfer.connSettled else { return }
+    let params = NWParameters.tcp
+    params.requiredInterfaceType = .wifi
+    let conn = NWConnection(host: host, port: port, using: params)
+    xfer.conn = conn
+
     conn.stateUpdateHandler = { [weak self] state in
+      guard let self = self else { return }
+      guard let xfer = self.wifiXfers[transferId] else { return }
       switch state {
       case .ready:
         if !xfer.connSettled {
@@ -299,33 +342,50 @@ class RTNMr20Module: RCTEventEmitter {
           xfer.connResolve?(nil)
         }
       case let .failed(err):
-        if !xfer.connSettled {
-          xfer.connSettled = true
-          xfer.connReject?("WIFI_CONN_ERR", err.localizedDescription, nil)
-          self?.wifiXfers.removeValue(forKey: transferId)
+        if xfer.connSettled {
+          // 已进入收流阶段后断开 → 收流失败。
+          self.failRecv(transferId, err.localizedDescription)
+          return
+        }
+        // 连接阶段失败（多为 DHCP 未就绪/设备 socket 未起）：窗口内退避重试。
+        // 退避 0.25s（原 1s 过冲）：正常整批走长连接不重连；仅初次建连/异常重连时用到，缩短空档。
+        conn.stateUpdateHandler = nil
+        conn.cancel()
+        if DispatchTime.now() < deadline {
+          self.wifiQueue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.attemptWifiConnect(transferId, host: host, port: port, deadline: deadline)
+          }
         } else {
-          self?.failRecv(transferId, err.localizedDescription)
+          xfer.connSettled = true
+          xfer.connReject?(
+            "WIFI_CONN_TIMEOUT",
+            "连接设备热点超时（未获取到 192.168.200.x 地址，请确认已加入设备热点）",
+            nil)
+          self.wifiXfers.removeValue(forKey: transferId)
         }
       case .cancelled:
-        if !xfer.connSettled {
-          xfer.connSettled = true
-          xfer.connReject?("WIFI_CONN_ERR", "连接已取消", nil)
-          self?.wifiXfers.removeValue(forKey: transferId)
-        } else {
-          self?.failRecv(transferId, "已中断")
+        // 收流阶段的中断才算失败；连接重试/abort 前的主动 cancel 不在此处理。
+        if xfer.connSettled, xfer.recvResolve != nil || xfer.recvReject != nil {
+          self.failRecv(transferId, "已中断")
         }
       default:
         break
       }
     }
     conn.start(queue: wifiQueue)
-    // 连接超时（设备热点未连上/权限未授予时 8s 后报错，而非无限卡住）
-    wifiQueue.asyncAfter(deadline: .now() + 8) { [weak self] in
-      guard let xfer = self?.wifiXfers[transferId], !xfer.connSettled else { return }
+
+    // deadline 兜底：卡在 .waiting（DHCP 始终拿不到）时也能超时收尾。
+    wifiQueue.asyncAfter(deadline: deadline) { [weak self] in
+      guard let self = self,
+            let xfer = self.wifiXfers[transferId], !xfer.connSettled else { return }
       xfer.connSettled = true
-      conn.cancel()
-      xfer.connReject?("WIFI_CONN_TIMEOUT", "连接设备热点超时", nil)
-      self?.wifiXfers.removeValue(forKey: transferId)
+      xfer.conn?.stateUpdateHandler = nil
+      xfer.conn?.cancel()
+      xfer.connReject?(
+        "WIFI_CONN_TIMEOUT",
+        "连接设备热点超时（未获取到 192.168.200.x 地址，请确认已加入设备热点）",
+        nil)
+      self.wifiXfers.removeValue(forKey: transferId)
     }
   }
 
@@ -368,7 +428,8 @@ class RTNMr20Module: RCTEventEmitter {
   private func receiveLoop(_ transferId: String) {
     guard let xfer = wifiXfers[transferId] else { return }
     let markerLen = 5
-    xfer.conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) {
+    guard let conn = xfer.conn else { return }
+    conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) {
       [weak self] data, _, isComplete, error in
       guard let self = self, let xfer = self.wifiXfers[transferId] else { return }
       if let error = error {
@@ -395,7 +456,14 @@ class RTNMr20Module: RCTEventEmitter {
         return
       }
       if isComplete {
-        self.finishRecvOk(transferId)
+        // 连接关闭：只有整文件已落盘（written>=expected）才算成功；否则按「截断」失败。
+        // 否则设备在上一文件 socket 拆除后尚未就绪就关闭本次连接时，会写入 0/半包却被误报成功，
+        // 表现为「显示 N 个上传成功，实际只到一半」，且这些半包 MP3 之后无法播放。
+        if xfer.written >= xfer.expected {
+          self.finishRecvOk(transferId)
+        } else {
+          self.failRecv(transferId, "连接提前关闭，仅收到 \(xfer.written)/\(xfer.expected) 字节")
+        }
         return
       }
       if xfer.recvSettled { return }
@@ -405,20 +473,27 @@ class RTNMr20Module: RCTEventEmitter {
 
   private func finishRecvOk(_ transferId: String) {
     guard let xfer = wifiXfers[transferId], !xfer.recvSettled else { return }
-    xfer.recvSettled = true
+    // 复用长连接：关掉本文件句柄、复位单文件计数，但**不 cancel、不移除 xfer、不清 stateUpdateHandler**，
+    // 让整批后续文件在同一 socket 上继续收流（消除逐条重连的 ~1s 空档）。连接由 wifiAbort 在批末统一关闭；
+    // 若设备在文件间自行关连，则由 .failed/.cancelled → failRecv 拆掉，JS 侧据此重连兜底。
     try? xfer.handle?.close()
-    xfer.conn.stateUpdateHandler = nil
-    xfer.conn.cancel()
-    wifiXfers.removeValue(forKey: transferId)
-    xfer.recvResolve?(xfer.filePath)
+    let path = xfer.filePath
+    let resolve = xfer.recvResolve
+    xfer.handle = nil
+    xfer.written = 0
+    xfer.receivedTotal = 0
+    xfer.filePath = ""
+    xfer.recvResolve = nil
+    xfer.recvReject = nil
+    resolve?(path)
   }
 
   private func failRecv(_ transferId: String, _ msg: String) {
     guard let xfer = wifiXfers[transferId], !xfer.recvSettled else { return }
     xfer.recvSettled = true
     try? xfer.handle?.close()
-    xfer.conn.stateUpdateHandler = nil
-    xfer.conn.cancel()
+    xfer.conn?.stateUpdateHandler = nil
+    xfer.conn?.cancel()
     wifiXfers.removeValue(forKey: transferId)
     xfer.recvReject?("WIFI_RECV_ERR", msg, nil)
   }

@@ -5,15 +5,17 @@ import {Menu, ChevronLeft, Sparkles} from 'lucide-react-native';
 import {colors, type as T, radius} from '../design/tokens';
 import {IconButton} from './kit';
 
-/** Home hub header: hamburger (opens drawer) + frosted "搜索记忆" search input. */
+/** Home hub header: hamburger (opens drawer) + frosted "搜索记忆" search input + optional right slot. */
 export function HomeHeader({
   onOpenDrawer,
   query,
   onChangeQuery,
+  right,
 }: {
   onOpenDrawer: () => void;
   query?: string;
   onChangeQuery?: (q: string) => void;
+  right?: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
   return (
@@ -32,6 +34,7 @@ export function HomeHeader({
           returnKeyType="search"
         />
       </View>
+      {right}
     </View>
   );
 }

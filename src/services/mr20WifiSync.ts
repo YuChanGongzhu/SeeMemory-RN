@@ -1,8 +1,9 @@
 /**
  * MR20 WiFi 快传编排：控制信令走 BLE，文件字节走 WiFi TCP（192.168.200.1:8475）。
  *
- * 与 mr20Sync（BLE）同构，但「下载」这一段换成 client.pullFileWifi：先程序化加入
- * 设备热点，再逐个 TCP 收流落盘。落盘后复用既有 markSynced / recordSyncedFile 入库管线。
+ * 与 mr20Sync（BLE）同构，但「下载」这一段换成 WiFi 长连接：先程序化加入设备热点，
+ * 再建**一条** TCP 长连接、逐个文件在同一 socket 上收流落盘（wifiOpenShared/wifiReceiveShared/
+ * wifiCloseShared），消除逐条重连空档。落盘后复用既有 markSynced / recordSyncedFile 入库管线。
  *
  * 连接阶段（开热点→取凭据→入网）单独抽出，方便 UI 的「连接中」清单逐步打勾；
  * 自动入网失败时上层可降级到「引导手动连接」，再调 wifiSyncFiles 续传。
@@ -100,8 +101,14 @@ export interface WifiSyncOptions {
   deleteAfter?: boolean;
 }
 
+/** 单个文件 WiFi 收流的最大尝试次数：瞬时失败（截断/连接掉线）退避重连可恢复。 */
+const WIFI_MAX_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 /**
- * 逐个 WiFi 拉取给定文件并入库。串行执行；单个失败只记录错误、继续下一个。
+ * 整批 WiFi 拉取给定文件并入库。**只建一次 TCP 长连接**，之后逐个文件在同一 socket 上收流
+ * （消除逐条重连的空档）；串行执行，单个失败只记录错误、断连后重连续传下一个。
  * 入参 files 为用户勾选的子集（手动快传场景）。
  */
 export async function wifiSyncFiles(
@@ -120,50 +127,87 @@ export async function wifiSyncFiles(
   let completed = 0;
   onProgress?.({total: files.length, completed});
 
-  for (const file of files) {
-    if (shouldCancel?.()) {
-      break; // 用户中断：已下好的保留在收件箱，未传的留待下次补齐。
+  // 整批复用一条长连接；出错(断连)时置 false，下个尝试自动重连续传。
+  let opened = false;
+  const ensureOpen = async () => {
+    if (!opened) {
+      await client.wifiOpenShared(host, port);
+      opened = true;
     }
-    try {
-      const {path: localPath} = await client.pullFileWifi(file.dir, file.fname, {
-        host,
-        port,
-        relativePath: mr20FileRelPath(file.dir, file.fname),
-        onProgress: (received, size) => {
-          onProgress?.({
-            total: files.length,
-            completed,
-            current: {
-              dir: file.dir,
-              fname: file.fname,
-              received,
-              size: size > 0 ? size : file.size,
+  };
+
+  try {
+    for (const file of files) {
+      if (shouldCancel?.()) {
+        break; // 用户中断：已下好的保留在收件箱，未传的留待下次补齐。
+      }
+      // 单文件多次尝试：截断/连接掉线等瞬时失败重连重试，避免半包被丢弃。
+      let localPath = '';
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= WIFI_MAX_ATTEMPTS; attempt++) {
+        if (shouldCancel?.()) {
+          break;
+        }
+        try {
+          await ensureOpen();
+          const res = await client.wifiReceiveShared(file.dir, file.fname, {
+            relativePath: mr20FileRelPath(file.dir, file.fname),
+            onProgress: (received, size) => {
+              onProgress?.({
+                total: files.length,
+                completed,
+                current: {
+                  dir: file.dir,
+                  fname: file.fname,
+                  received,
+                  size: size > 0 ? size : file.size,
+                },
+              });
             },
           });
-        },
-      });
-      await markSynced(file.dir, file.fname);
-
-      const ingest = await recordSyncedFile({
-        localPath,
-        dir: file.dir,
-        fname: file.fname,
-        seconds: file.seconds,
-        sizeBytes: file.size,
-      });
-      if (deleteAfter) {
-        await client.deleteFile(file.dir, file.fname).catch(() => undefined);
+          localPath = res.path;
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          // 出错时长连接可能已被原生拆掉：关旧连、置未连，下个尝试重连续传。
+          opened = false;
+          await client.wifiCloseShared().catch(() => undefined);
+          if (attempt < WIFI_MAX_ATTEMPTS) {
+            await sleep(300 * attempt); // 退避，给设备 socket 服务重置的时间
+          }
+        }
       }
-      results.push({file, localPath, ingest});
-    } catch (e) {
-      results.push({
-        file,
-        localPath: '',
-        error: String((e as Error)?.message || e),
-      });
-    } finally {
-      completed += 1;
-      onProgress?.({total: files.length, completed});
+      try {
+        if (localPath) {
+          await markSynced(file.dir, file.fname);
+          const ingest = await recordSyncedFile({
+            localPath,
+            dir: file.dir,
+            fname: file.fname,
+            seconds: file.seconds,
+            sizeBytes: file.size,
+          });
+          if (deleteAfter) {
+            await client.deleteFile(file.dir, file.fname).catch(() => undefined);
+          }
+          results.push({file, localPath, ingest});
+        } else {
+          results.push({
+            file,
+            localPath: '',
+            error: String((lastErr as Error)?.message || lastErr || '传输失败'),
+          });
+        }
+      } finally {
+        completed += 1;
+        onProgress?.({total: files.length, completed});
+      }
+    }
+  } finally {
+    // 批末统一关闭长连接（用户取消/异常也要关，避免 socket 悬空）。
+    if (opened) {
+      await client.wifiCloseShared().catch(() => undefined);
     }
   }
 

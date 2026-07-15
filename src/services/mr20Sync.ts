@@ -41,13 +41,20 @@ export interface Mr20DeviceFiles {
  * 总数 / 待同步数 / 总字节。用于设备状态卡展示「设备共有 N 个文件」。
  * 与同步/状态查询是同类 BLE 命令，调用方需串行触发，避免命令-应答交错。
  */
-export async function scanDeviceFiles(client: Mr20Client): Promise<Mr20DeviceFiles> {
+export async function scanDeviceFiles(
+  client: Mr20Client,
+  shouldCancel?: () => boolean,
+): Promise<Mr20DeviceFiles> {
   const dirs = await client.listDirs();
   const synced = await getSyncedSet();
   let total = 0;
   let pending = 0;
   let bytes = 0;
   for (const dir of dirs) {
+    // 让位于用户传输：传输开始后中止后台扫描，避免占着 BLE 让传输卡很久。
+    if (shouldCancel?.()) {
+      break;
+    }
     const files = await client.listFiles(dir);
     for (const f of files) {
       total += 1;
@@ -60,7 +67,7 @@ export async function scanDeviceFiles(client: Mr20Client): Promise<Mr20DeviceFil
   return {total, pending, bytes};
 }
 
-/** 列出设备上所有「尚未同步」的录音文件。 */
+/** 列出设备上所有「尚未同步」的录音文件（供自动同步 syncAllFiles 用，不重拉已传）。 */
 export async function listPendingFiles(client: Mr20Client): Promise<Mr20File[]> {
   const dirs = await client.listDirs();
   const synced = await getSyncedSet();
@@ -76,6 +83,27 @@ export async function listPendingFiles(client: Mr20Client): Promise<Mr20File[]> 
   return pending;
 }
 
+/**
+ * 列出设备上「全部」录音文件（不按已同步集合过滤）。供「设备文件」浏览页展示完整设备清单，
+ * 已传输的也保留在列表里，允许用户重新传输覆盖本地同名文件。
+ */
+export async function listAllDeviceFiles(
+  client: Mr20Client,
+  shouldCancel?: () => boolean,
+): Promise<Mr20File[]> {
+  const dirs = await client.listDirs();
+  const all: Mr20File[] = [];
+  for (const dir of dirs) {
+    // 让位于用户传输：传输开始后中止后台扫描，避免占着 BLE 让传输卡很久。
+    if (shouldCancel?.()) {
+      break;
+    }
+    const files = await client.listFiles(dir);
+    all.push(...files);
+  }
+  return all;
+}
+
 function ensureMp3Name(fname: string): string {
   return /\.mp3$/i.test(fname) ? fname : `${fname}.mp3`;
 }
@@ -86,6 +114,43 @@ export const MR20_FILES_ROOT = 'mr20';
 /** 录音在 Documents 下的相对路径 mr20/<dir>/<fname>.mp3（BLE 与 WiFi 落盘共用）。 */
 export function mr20FileRelPath(dir: string, fname: string): string {
   return `${MR20_FILES_ROOT}/${dir}/${ensureMp3Name(fname)}`;
+}
+
+/**
+ * 当前沙盒 Documents 绝对路径（每会话缓存一次）。旧二进制无 getDocumentsDir
+ * 原生方法时返回 null，让调用方兜底到历史绝对路径。
+ */
+let docsDirCache: string | null = null;
+export async function getDocsDir(): Promise<string | null> {
+  if (docsDirCache) {
+    return docsDirCache;
+  }
+  const fn = (Mr20Native as {getDocumentsDir?: () => Promise<string>})
+    .getDocumentsDir;
+  if (typeof fn !== 'function') {
+    return null;
+  }
+  try {
+    docsDirCache = await fn();
+    return docsDirCache;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 现算某条录音的本地绝对路径：当前 Documents 目录 + 相对路径 mr20/<dir>/<fname>.mp3。
+ * 不再信任持久化的 item.localPath（容器 UUID 会随重装/恢复变化而失效）；
+ * 拿不到 Documents 目录时兜底旧绝对路径（不比现状差）。
+ */
+export async function resolveLocalPath(item: {
+  dir: string;
+  fname: string;
+  localPath?: string;
+}): Promise<string> {
+  const rel = mr20FileRelPath(item.dir, item.fname);
+  const docs = await getDocsDir();
+  return docs ? `${docs}/${rel}` : item.localPath ?? rel;
 }
 
 /** 把 MP3 字节落盘到 Documents/mr20/<dir>/<fname>，返回绝对路径。 */

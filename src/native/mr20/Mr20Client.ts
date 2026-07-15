@@ -90,6 +90,10 @@ export class Mr20Client {
   // 每个 collect() 的取消句柄；断连/销毁时统一结算，避免残留超时定时器在
   // 8 秒后对着空 promise reject 出「未处理拒绝」。
   private pendingCancels: Set<(err: Error) => void> = new Set();
+  // BLE 请求-应答事务串行链：设备应答会广播给所有 collector，两个「同类型」事务并发时会串扰
+  // （典型：并发的全盘扫描——listDirs/listFiles——彼此的 DONE 提前结算对方，导致目录/文件被截断，
+  // 表现为「设备文件只剩当天」）。用 promise 链保证同一时刻只有一个 collect 事务在飞。
+  private txChain: Promise<void> = Promise.resolve();
   private fileXfer: FileTransfer | null = null;
   private wifiTransferId: string | null = null;
   private listeners: {[K in keyof EventMap]?: Set<Listener<K>>} = {};
@@ -370,6 +374,19 @@ export class Mr20Client {
    * 取消（cancel）/超时/命中应答任一发生后都会拆掉定时器并从收集器表移除，
    * 保证不会残留「8 秒后对空 promise reject」的孤儿定时器。
    */
+  /**
+   * 串行执行一个 BLE 请求-应答事务（收集器注册 + 写命令 + 等应答）。排队期间**不注册** collector，
+   * 保证同一时刻只有一个 collect 事务在飞，杜绝并发扫描的应答串扰。链在成功/失败后都继续推进。
+   */
+  private runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.txChain.then(fn, fn);
+    this.txChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   private collect<T>(
     reducer: Reducer<T>,
     timeoutMs = DEFAULT_TIMEOUT,
@@ -440,25 +457,27 @@ export class Mr20Client {
     );
   }
 
-  private async sendAndWait(
+  private sendAndWait(
     command: string,
     predicate: (msg: DeviceMessage) => boolean,
     timeoutMs = DEFAULT_TIMEOUT,
   ): Promise<DeviceMessage> {
-    const {promise, cancel} = this.collect<DeviceMessage>(
-      msg => (predicate(msg) ? {done: true, value: msg} : {done: false}),
-      timeoutMs,
-    );
-    try {
-      await this.write(command);
-    } catch (e) {
-      // write 失败（如已断开）时，等待者还没被任何人 await——必须主动结算，
-      // 否则它会在超时后抛出未处理拒绝。先挂个 noop catch 吞掉取消引发的拒绝。
-      promise.catch(() => undefined);
-      cancel(e as Error);
-      throw e;
-    }
-    return promise;
+    return this.runExclusive(async () => {
+      const {promise, cancel} = this.collect<DeviceMessage>(
+        msg => (predicate(msg) ? {done: true, value: msg} : {done: false}),
+        timeoutMs,
+      );
+      try {
+        await this.write(command);
+      } catch (e) {
+        // write 失败（如已断开）时，等待者还没被任何人 await——必须主动结算，
+        // 否则它会在超时后抛出未处理拒绝。先挂个 noop catch 吞掉取消引发的拒绝。
+        promise.catch(() => undefined);
+        cancel(e as Error);
+        throw e;
+      }
+      return promise;
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -492,19 +511,21 @@ export class Mr20Client {
    * 返回 true 表示设备在 timeout 内回了 FIRMWARE 应答。
    */
   async probe(timeoutMs = 2500): Promise<boolean> {
-    const {promise, cancel} = this.collect<boolean>(
-      msg => (msg.type === 'FIRMWARE' ? {done: true, value: true} : {done: false}),
-      timeoutMs,
-    );
-    try {
-      await this.write(Cmd.getFirmware());
-    } catch (e) {
-      promise.catch(() => undefined);
-      cancel(e as Error);
-      return false;
-    }
-    // 超时（设备静默）按「不开放」处理，吞掉超时拒绝。
-    return promise.catch(() => false);
+    return this.runExclusive(async () => {
+      const {promise, cancel} = this.collect<boolean>(
+        msg => (msg.type === 'FIRMWARE' ? {done: true, value: true} : {done: false}),
+        timeoutMs,
+      );
+      try {
+        await this.write(Cmd.getFirmware());
+      } catch (e) {
+        promise.catch(() => undefined);
+        cancel(e as Error);
+        return false;
+      }
+      // 超时（设备静默）按「不开放」处理，吞掉超时拒绝。
+      return promise.catch(() => false);
+    });
   }
 
   /** 标记设备已就绪（SK&OK 或免密钥探测通过都走这里）。 */
@@ -605,45 +626,49 @@ export class Mr20Client {
   // -------------------------------------------------------------------------
 
   async listDirs(timeoutMs = DEFAULT_TIMEOUT): Promise<string[]> {
-    const dirs: string[] = [];
-    const {promise, cancel} = this.collect<string[]>(msg => {
-      if (msg.type === 'DIR') {
-        dirs.push(msg.name);
+    return this.runExclusive(async () => {
+      const dirs: string[] = [];
+      const {promise, cancel} = this.collect<string[]>(msg => {
+        if (msg.type === 'DIR') {
+          dirs.push(msg.name);
+        }
+        if (msg.type === 'DIRS_DONE') {
+          return {done: true, value: dirs};
+        }
+        return {done: false};
+      }, timeoutMs);
+      try {
+        await this.write(Cmd.listDirs());
+      } catch (e) {
+        promise.catch(() => undefined);
+        cancel(e as Error);
+        throw e;
       }
-      if (msg.type === 'DIRS_DONE') {
-        return {done: true, value: dirs};
-      }
-      return {done: false};
-    }, timeoutMs);
-    try {
-      await this.write(Cmd.listDirs());
-    } catch (e) {
-      promise.catch(() => undefined);
-      cancel(e as Error);
-      throw e;
-    }
-    return promise;
+      return promise;
+    });
   }
 
   async listFiles(dir: string, timeoutMs = DEFAULT_TIMEOUT): Promise<Mr20File[]> {
-    const files: Mr20File[] = [];
-    const {promise, cancel} = this.collect<Mr20File[]>(msg => {
-      if (msg.type === 'FILE') {
-        files.push({dir: msg.dir, fname: msg.fname, seconds: msg.seconds, size: msg.size});
+    return this.runExclusive(async () => {
+      const files: Mr20File[] = [];
+      const {promise, cancel} = this.collect<Mr20File[]>(msg => {
+        if (msg.type === 'FILE') {
+          files.push({dir: msg.dir, fname: msg.fname, seconds: msg.seconds, size: msg.size});
+        }
+        if (msg.type === 'FILE_LIST_DONE') {
+          return {done: true, value: files};
+        }
+        return {done: false};
+      }, timeoutMs);
+      try {
+        await this.write(Cmd.listFiles(dir));
+      } catch (e) {
+        promise.catch(() => undefined);
+        cancel(e as Error);
+        throw e;
       }
-      if (msg.type === 'FILE_LIST_DONE') {
-        return {done: true, value: files};
-      }
-      return {done: false};
-    }, timeoutMs);
-    try {
-      await this.write(Cmd.listFiles(dir));
-    } catch (e) {
-      promise.catch(() => undefined);
-      cancel(e as Error);
-      throw e;
-    }
-    return promise;
+      return promise;
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -656,8 +681,19 @@ export class Mr20Client {
     onProgress?: (received: number, total: number) => void,
     timeoutMs = 120000,
   ): Promise<Uint8Array> {
+    // 与扫描/状态等控制指令走同一把串行锁：设备单线程，若在扫描（listDirs/listFiles）途中
+    // 插进 syncFile，设备会不回 FILE_DATA_DONE，导致「字节收完但传输不结算、卡很久」。
+    return this.runExclusive(() => this.pullFileLocked(dir, fname, onProgress, timeoutMs));
+  }
+
+  private pullFileLocked(
+    dir: string,
+    fname: string,
+    onProgress?: (received: number, total: number) => void,
+    timeoutMs = 120000,
+  ): Promise<Uint8Array> {
     if (this.fileXfer) {
-      throw new Error('已有文件正在同步');
+      return Promise.reject(new Error('已有文件正在同步'));
     }
     return new Promise<Uint8Array>((resolve, reject) => {
       let timer = setTimeout(() => {
@@ -814,37 +850,44 @@ export class Mr20Client {
   }
 
   /**
-   * WiFi 拉取单个文件：BLE 发 W 命令拿 W&LEN，再由原生 TCP 接收器收流落盘。
-   * **不设置 this.fileXfer**——文件字节走 WiFi TCP，不经过 BLE notify，避免
-   * handleFrame 误把无关 notify 当文件数据。
+   * 建立整批 WiFi 快传共用的 TCP 长连接（**只连一次**）。后续每个文件用 {@link wifiReceiveShared}
+   * 在同一 socket 上收流，批末用 {@link wifiCloseShared} 关闭——避免逐条重连的 ~1s 空档。
+   * **必须早于发 W**（设备一回 W&LEN 就往 socket 推字节，晚连丢数据卡 0）。
    */
-  async pullFileWifi(
-    dir: string,
-    fname: string,
-    opts: {
-      host: string;
-      port: number;
-      relativePath: string;
-      resumeBytes?: number;
-      onProgress?: (received: number, total: number) => void;
-    },
-  ): Promise<{path: string; total: number}> {
-    const {host, port, relativePath, resumeBytes = 0, onProgress} = opts;
-    const transferId = `${dir}/${fname}/${Date.now()}`;
+  async wifiOpenShared(host: string, port: number): Promise<void> {
+    const transferId = `wifi/${Date.now()}`;
     this.wifiTransferId = transferId;
-    let total = 0;
-
-    // 1) **先连 TCP socket**（必须早于发 W——设备一回 W&LEN 就往 socket 推字节，晚连丢数据卡 0）。
-    this.log(`[wifi] 连接 ${host}:${port} …`);
+    this.log(`[wifi] 建立长连接 ${host}:${port} …`);
     try {
       await Mr20Native.wifiConnect(host, port, transferId);
     } catch (e) {
       this.wifiTransferId = null;
       throw new Error(`连接设备热点失败：${String((e as Error)?.message || e)}`);
     }
-    this.log('[wifi] socket 已连接');
+    this.log('[wifi] 长连接已建立');
+  }
 
-    // 2) 订阅原生进度事件（仅本次 transferId）。
+  /**
+   * 在已建立的长连接上收一个文件：BLE 发 W 拿 W&LEN，再由原生 TCP 接收器收流落盘。
+   * **不建连、不关连**（连接复用见 {@link wifiOpenShared}）。**不设置 this.fileXfer**——
+   * 文件字节走 WiFi TCP，不经过 BLE notify，避免 handleFrame 误把无关 notify 当文件数据。
+   */
+  async wifiReceiveShared(
+    dir: string,
+    fname: string,
+    opts: {
+      relativePath: string;
+      onProgress?: (received: number, total: number) => void;
+    },
+  ): Promise<{path: string; total: number}> {
+    const transferId = this.wifiTransferId;
+    if (!transferId) {
+      throw new Error('WiFi 长连接未建立');
+    }
+    const {relativePath, onProgress} = opts;
+    let total = 0;
+
+    // 订阅原生进度事件（仅本次长连接的 transferId；同一时刻只有一个文件在收）。
     const sub = mr20Emitter.addListener('onWifiProgress', (d: any) => {
       if (String(d?.transferId) !== transferId) {
         return;
@@ -856,11 +899,9 @@ export class Mr20Client {
     });
 
     try {
-      // 3) BLE 下发 W 指令拿文件长度（W&LEN）。
+      // BLE 下发 W 指令拿文件长度（W&LEN）。
       const lenMsg = await this.sendAndWait(
-        resumeBytes > 0
-          ? Cmd.wifiFileResume(dir, fname, resumeBytes)
-          : Cmd.wifiFile(dir, fname),
+        Cmd.wifiFile(dir, fname),
         x => x.type === 'FILE_DATA_LEN' || x.type === 'FILE_DATA_ERR',
         8000,
       );
@@ -870,21 +911,25 @@ export class Mr20Client {
       total = lenMsg.type === 'FILE_DATA_LEN' ? lenMsg.length : 0;
       this.log(`[wifi] W&LEN=${total}，开始收流`);
 
-      // 4) 在已连接的 socket 上收流落盘（含剥离 5 字节尾标），返回绝对路径。
+      // 在长连接上收流落盘（含剥离 5 字节尾标），返回绝对路径。
       const path = await Mr20Native.wifiReceiveFile(relativePath, total, transferId);
       this.log('[wifi] 收流完成');
       return {path, total};
-    } catch (e) {
-      // 失败时关掉悬空 socket（成功路径原生已自行 cancel）。
-      await Mr20Native.wifiAbort(transferId).catch(() => undefined);
-      throw e;
     } finally {
-      this.wifiTransferId = null;
       sub.remove();
     }
   }
 
-  /** 中断正在进行的 WiFi 接收（关 socket），使当前文件 pullFileWifi 立即出错。 */
+  /** 关闭整批的 WiFi 长连接（批末或异常时）。 */
+  async wifiCloseShared(): Promise<void> {
+    const id = this.wifiTransferId;
+    this.wifiTransferId = null;
+    if (id) {
+      await Mr20Native.wifiAbort(id).catch(() => undefined);
+    }
+  }
+
+  /** 中断正在进行的 WiFi 接收（关 socket），使当前文件的 wifiReceiveShared 立即出错。 */
   async abortWifi(): Promise<void> {
     const id = this.wifiTransferId;
     if (id) {

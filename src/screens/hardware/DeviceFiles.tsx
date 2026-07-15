@@ -4,8 +4,8 @@
  * 「日期-文件名」再逐条勾选。两级都带「全选」。勾选后走 WiFi 快传同步进「我的录音」
  * ——与「WiFi 快传」页同一条高速链路（连接热点 → 正在快传 → 快传成功），比蓝牙快 10×。
  *
- * 数据源复用 useMr20.listPendingDeviceFiles（尚未同步的设备文件）；传输/连接的
- * 覆盖层复用 WifiTransferOverlays（状态取自 useMr20 的 wifi* 字段）。
+ * 数据源用 useMr20.listAllDeviceFiles（设备上全部录音，含已传输，可重新传输覆盖本地）；
+ * 每条按 inbox 标注「已传输」；传输/连接的覆盖层复用 TransferBadge（状态取自 useMr20 的 wifi* 字段）。
  */
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
@@ -34,7 +34,8 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   const {
     connState,
     connectedDevice,
-    listPendingDeviceFiles,
+    listAllDeviceFiles,
+    inbox,
     startWifiTransfer,
     syncSelected,
   } = useMr20();
@@ -48,7 +49,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const list = await listPendingDeviceFiles();
+      const list = await listAllDeviceFiles();
       if (!alive) {
         return;
       }
@@ -58,7 +59,10 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     return () => {
       alive = false;
     };
-  }, [listPendingDeviceFiles]);
+  }, [listAllDeviceFiles]);
+
+  // 已传输集合：inbox 项 id 即 `${dir}/${fname}`，与 keyOf 口径一致。
+  const transferred = useMemo(() => new Set(inbox.map(i => i.id)), [inbox]);
 
   // 注意：**不**在离开页面时 resetWifiTransfer——传输改为非阻塞浮标后，用户会主动
   // 返回主页边传边做别的事；卸载即 reset 会误取消进行中的快传。收尾由浮标「取消/知道了」处理。
@@ -151,7 +155,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
         ) : loading ? (
           <ActivityIndicator color={HW.blue} style={st.loading} />
         ) : files.length === 0 ? (
-          <Text style={st.hint}>没有待同步的录音，所有录音都已同步到我的录音。</Text>
+          <Text style={st.hint}>设备暂无录音。</Text>
         ) : openDir ? (
           // ---- 二级：某天的文件 ----
           <>
@@ -188,6 +192,11 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
                         {fmtHuman(f.seconds)} · {fmtMB(f.size)}
                       </Text>
                     </View>
+                    {transferred.has(keyOf(f)) ? (
+                      <View style={st.doneBadge}>
+                        <Text style={st.doneBadgeText}>已传输</Text>
+                      </View>
+                    ) : null}
                   </TouchableOpacity>
                 );
               })}
@@ -197,16 +206,18 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
           // ---- 一级：日期文件夹 ----
           <>
             <View style={st.selectHead}>
-              <Text style={st.selectTitle}>选择要同步的录音</Text>
+              <Text style={st.selectTitle}>全部设备录音</Text>
               <TouchableOpacity onPress={toggleAll} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
                 <Text style={st.selectAll}>{allSelected ? '取消全选' : '全选'}</Text>
               </TouchableOpacity>
             </View>
+            <Text style={st.headHint}>已传输的录音仍在列表中，可重新传输以覆盖本地文件。</Text>
             <View style={st.rowGap}>
               {groups.map(([dir, items]) => {
                 const sel = dirSelCount(items);
                 const all = sel === items.length;
                 const bytes = items.reduce((n, f) => n + (f.size || 0), 0);
+                const done = items.filter(f => transferred.has(keyOf(f))).length;
                 return (
                   <View key={dir} style={st.folderRow}>
                     <TouchableOpacity
@@ -232,7 +243,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
                       <View style={st.flex1}>
                         <Text style={st.fileName}>{dir}</Text>
                         <Text style={st.fileMeta}>
-                          {items.length} 个文件 · {fmtMB(bytes)}
+                          {items.length} 个文件 · {fmtMB(bytes)} · 已传 {done}/{items.length}
                           {sel > 0 ? ` · 已选 ${sel}` : ''}
                         </Text>
                       </View>
@@ -298,9 +309,13 @@ const st = StyleSheet.create({
   rowGap: {gap: 10},
   hint: {fontSize: 14, color: HW.textSub, textAlign: 'center', paddingVertical: 40, lineHeight: 21},
 
-  selectHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 14},
+  selectHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 8},
   selectTitle: {fontSize: 17, fontWeight: '700', color: HW.textMain},
   selectAll: {fontSize: 14, color: HW.blue, fontWeight: '600'},
+  headHint: {fontSize: 12, color: HW.textSub, lineHeight: 18, marginBottom: 14},
+
+  doneBadge: {paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: HW.divider},
+  doneBadgeText: {fontSize: 11, color: HW.textSub, fontWeight: '600'},
 
   folderRow: {flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: HW.card, borderRadius: 16, paddingLeft: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
   folderMain: {flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingRight: 14},

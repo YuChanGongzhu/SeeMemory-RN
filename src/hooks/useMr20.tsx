@@ -19,7 +19,7 @@ import {
   Mr20File,
   Mr20Status,
 } from '../native/mr20/Mr20Client';
-import {isMr20WifiAvailable} from '../native/mr20/Mr20Native';
+import {Mr20Native, isMr20NativeAvailable, isMr20WifiAvailable} from '../native/mr20/Mr20Native';
 import {MR20_PAIR_KEY} from '../native/mr20/protocol';
 import {
   clearBatchGroupId,
@@ -51,7 +51,7 @@ import {
 import {
   deleteAllLocalFiles,
   deleteLocalFiles,
-  listPendingFiles,
+  listAllDeviceFiles as listAllDeviceFilesSvc,
   scanDeviceFiles,
   syncAllFiles,
   syncFiles,
@@ -128,14 +128,17 @@ interface Mr20ContextType {
   startScan: () => Promise<void>;
   stopScan: () => void;
   connectAndPair: (deviceId: string, name: string) => Promise<void>;
+  // 自动/手动重连上一次配对过的设备（静默扫描→匹配 id→连接）。首页用。
+  // force=true 用于用户手动「重新连接」，绕过「每会话只自动一次」的门控。
+  reconnectSaved: (force?: boolean) => Promise<void>;
   clearPairing: (deviceId: string, name: string) => Promise<void>;
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   // 同步勾选的设备文件子集到「我的录音」（设备文件浏览页用）。
   syncSelected: (files: Mr20File[]) => Promise<void>;
   stopSync: () => void;
-  // 列出设备上「尚未同步」的录音文件（供 WiFi 快传页勾选）。
-  listPendingDeviceFiles: () => Promise<Mr20File[]>;
+  // 列出设备上「全部」录音文件（设备文件浏览页用，含已传输，可重传覆盖本地）。
+  listAllDeviceFiles: () => Promise<Mr20File[]>;
   // WiFi 热点管理（WifiManage 页用）：开/关热点、读当前 SSID/密码/状态。
   openHotspot: () => Promise<void>;
   closeHotspot: () => Promise<void>;
@@ -190,12 +193,13 @@ const Mr20Context = createContext<Mr20ContextType>({
   startScan: noop,
   stopScan: () => {},
   connectAndPair: noop,
+  reconnectSaved: noop,
   clearPairing: noop,
   disconnect: noop,
   syncNow: noop,
   syncSelected: noop,
   stopSync: () => {},
-  listPendingDeviceFiles: async () => [],
+  listAllDeviceFiles: async () => [],
   openHotspot: noop,
   closeHotspot: noop,
   getHotspotInfo: async () => null,
@@ -277,11 +281,31 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   // 批处理轮询：activeGroupRef 标记当前正在轮询的 groupId（新批次会顶掉旧的）。
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeGroupRef = useRef<string | null>(null);
+  // 轮询中已增量回填过的「已完成数」；completedFiles 增长时才去拉一次 /result 逐条回填。
+  const lastResultCompletedRef = useRef(0);
   // 同步中断标志：stopSync 置 true，syncAllFiles 每个文件前检查并停下。
   const syncCancelRef = useRef(false);
   // WiFi 快传中断标志 + 待传文件（手动入网后续传用）。
   const wifiCancelRef = useRef(false);
   const wifiFilesRef = useRef<Mr20File[]>([]);
+  // 传输进行中标志：BLE 同步 or WiFi 快传（含连接/手动引导）期间为 true，
+  // 让后台设备文件扫描（scanDeviceFiles/listAllDeviceFiles）中途让位，避免占着 BLE 让传输卡住。
+  const transferActiveRef = useRef(false);
+  useEffect(() => {
+    transferActiveRef.current =
+      syncing ||
+      wifiPhase === 'connecting' ||
+      wifiPhase === 'transferring' ||
+      wifiPhase === 'manual';
+  }, [syncing, wifiPhase]);
+
+  // 自动重连：每个 App 会话只自动跑一次；connStateRef 供重连状态机读取实时连接态
+  // （避免闭包读到旧值）。
+  const reconnectStartedRef = useRef(false);
+  const connStateRef = useRef(connState);
+  useEffect(() => {
+    connStateRef.current = connState;
+  }, [connState]);
 
   // 懒加载 client + 绑定事件
   const getClient = useCallback((): Mr20Client => {
@@ -414,7 +438,9 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       return;
     }
     try {
-      setDeviceFiles(await scanDeviceFiles(client));
+      setDeviceFiles(
+        await scanDeviceFiles(client, () => transferActiveRef.current),
+      );
     } catch (e) {
       setError(String((e as Error)?.message || e));
     }
@@ -472,13 +498,15 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   // WiFi 快传
   // -------------------------------------------------------------------------
 
-  // 列设备上待同步文件（WiFi 快传页勾选用）。与 BLE 列目录同类命令，调用方需串行触发。
-  const listPendingDeviceFiles = useCallback(async (): Promise<Mr20File[]> => {
+  // 列设备上「全部」录音文件（设备文件浏览页用，含已传输）。与 BLE 列目录同类命令，串行触发。
+  const listAllDeviceFiles = useCallback(async (): Promise<Mr20File[]> => {
     const client = clientRef.current;
     if (!client || connState !== 'connected') {
       return [];
     }
-    return listPendingFiles(client).catch(() => []);
+    return listAllDeviceFilesSvc(client, () => transferActiveRef.current).catch(
+      () => [],
+    );
   }, [connState]);
 
   // 热点管理：开/关热点、读 SSID/密码/状态。BLE 命令串行，getHotspotInfo 顺序发。
@@ -523,6 +551,11 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       // （listDirs + 每个日期文件夹 listFiles，串行 BLE、每次超时 8s）会让进度到 100%
       // 后弹窗仍停在「正在快传」很久，是「图2 卡住/图2 后半天不出图3」的主因。
       setWifiPhase('done');
+      // 完成即退设备热点（socket 已在 wifiSyncFiles 的 finally 关闭，此时退 AP 安全）：
+      // iOS removeConfiguration 后系统自动回连此前记住的 WiFi，避免手机困在无网的设备
+      // 热点上，也让随后走公网的 COS 上传/批处理能联网。用户点「知道了」时的 reset 再调
+      // 一次是 no-op（joinedSSID 已置空）。
+      disconnectWifi(client).catch(() => undefined);
       // 收尾（不阻塞成功弹窗）：刷新收件箱；「待同步」数按已成功数本地递减，
       // 跳过昂贵的 BLE 全盘重扫（下次进设备主页会自然重新统计）。
       refreshInbox().catch(() => undefined);
@@ -647,6 +680,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const pollBatch = useCallback(
     (groupId: string) => {
       activeGroupRef.current = groupId;
+      lastResultCompletedRef.current = 0;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
@@ -662,6 +696,21 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
               ? {...prev, status: p.status, completed: p.completedFiles, total: p.totalFiles}
               : prev,
           );
+          // 完成数增长 → 拉一次部分结果，逐条回填转写（未完成的条目不在列表里，applyBatchResult 会跳过）。
+          // 常规 tick 只发轻量进度请求；仅在有新完成时才多发一次 /result。
+          if (p.completedFiles > lastResultCompletedRef.current) {
+            try {
+              const res = await getBatchResult(groupId);
+              if (activeGroupRef.current !== groupId) {
+                return; // 拉结果期间被新批次顶替
+              }
+              await applyBatchResult(groupId, res.results || []);
+              lastResultCompletedRef.current = p.completedFiles;
+              await refreshInbox();
+            } catch {
+              // 结果查询失败：不推进 lastResultCompletedRef，下个 tick 再试。
+            }
+          }
           if (isBatchTerminal(p.status)) {
             activeGroupRef.current = null;
             await finishBatch(groupId);
@@ -676,7 +725,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       };
       tick();
     },
-    [finishBatch],
+    [finishBatch, refreshInbox],
   );
 
   // 上传一批已同步文件到 COS → 提交后端批处理 → 标记 queued → 启动轮询。
@@ -709,6 +758,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           fileName: batchFileName(u),
           date: batchDate(u),
           durationMs: u.seconds > 0 ? Math.round(u.seconds * 1000) : undefined,
+          // 已转写(重新聚合)的录音带上本地转写，后端据此跳过下载+ASR，不耗转写额度。
+          transcription: u.transcript?.trim() || undefined,
         }));
         const group = await createAudioBatch(payload);
         await markItemsQueued(uploaded.map(u => u.id), group.groupId);
@@ -846,6 +897,95 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
   }, [connState]);
 
+  // 自动重连上一次配对过的设备（首页无需跳设备页即可连上）。
+  // 原生 connect(id) 依赖扫描到的句柄，无法免扫描直连，故走「静默扫描→匹配 saved.id→
+  // connectAndPair（内部自动 stopScan）」。全程静默：失败/超时不弹错误，图标回到未连接态。
+  const reconnectSaved = useCallback(async (force = false) => {
+    if (!force && reconnectStartedRef.current) {
+      return;
+    }
+    // 同步占位：自动路径每会话只跑一次，且防 StrictMode / 快速重渲染并发双跑
+    // （下面有 await，若在此之后才置位会有并发窗口）。手动 force 不占位、可反复重试。
+    if (!force) {
+      reconnectStartedRef.current = true;
+    }
+    if (!isMr20NativeAvailable) {
+      return; // 原生未链接（模拟器/未构建）
+    }
+    if (connStateRef.current !== 'idle') {
+      return; // 用户已在手动扫描/连接，让位
+    }
+    let saved: Awaited<ReturnType<typeof getPairedDevice>>;
+    try {
+      saved = await getPairedDevice();
+    } catch {
+      return;
+    }
+    if (!saved?.id) {
+      return; // 未配对过
+    }
+    let ble: string;
+    try {
+      ble = await Mr20Native.getBleState();
+    } catch {
+      return;
+    }
+    if (ble !== 'poweredOn') {
+      return; // 蓝牙未开/未授权：自动尝试作罢，用户可用弹层「重新连接」手动重试
+    }
+
+    const client = getClient();
+    const target = saved;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let off = () => {};
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      off();
+    };
+    off = client.on('deviceFound', d => {
+      // 只认目标设备；done 保证单次触发。不读 connStateRef（React 态有滞后，
+      // 可能漏掉扫描刚起就命中的快速 deviceFound）。
+      if (done || d.id !== target.id) {
+        return;
+      }
+      done = true;
+      cleanup();
+      // connectAndPair 内部会 stopScan + probe/authenticate + savePairedDevice。
+      connectAndPair(target.id, target.name)
+        .then(async () => {
+          // 首页没有 HardwarePage 的「连上拉状态」effect，这里补一次。
+          await refreshStatus().catch(() => undefined);
+          await refreshDeviceFiles().catch(() => undefined);
+        })
+        .catch(() => setError(null)); // 静默：不在首页弹错误横幅
+    });
+    timer = setTimeout(() => {
+      if (done) {
+        return;
+      }
+      done = true;
+      off();
+      clientRef.current?.stopScan();
+    }, 12000);
+    try {
+      await client.startScan();
+    } catch {
+      if (!done) {
+        done = true;
+        cleanup();
+      }
+    }
+  }, [getClient, connectAndPair, refreshStatus, refreshDeviceFiles]);
+
+  // 挂载后自动尝试一次重连（内部有 ref/idle/BLE 门控，重复调用安全幂等）。
+  useEffect(() => {
+    reconnectSaved().catch(() => undefined);
+  }, [reconnectSaved]);
+
   // 一键校准设备时间（BLE 真实操作，连接时已自动调用一次；时间校准页手动重发）。
   const syncTime = useCallback(async () => {
     await clientRef.current?.syncTime();
@@ -892,12 +1032,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     startScan,
     stopScan,
     connectAndPair,
+    reconnectSaved,
     clearPairing,
     disconnect,
     syncNow,
     syncSelected,
     stopSync,
-    listPendingDeviceFiles,
+    listAllDeviceFiles,
     openHotspot,
     closeHotspot,
     getHotspotInfo,

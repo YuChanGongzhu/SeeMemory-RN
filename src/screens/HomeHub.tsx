@@ -11,21 +11,17 @@ import {useAppDrawer} from '../hooks/useAppDrawer';
 import {useAuth} from '../auth/AuthContext';
 import {useWriteGate} from '../hooks/useWriteGate';
 import {useNav} from '../navigation/nav';
-import {searchMemoryFragments, type MemoryFragment} from '../apis/requests/memory';
+import {searchMemoryFragments} from '../apis/requests/memory';
+import {fragmentToCard, parseTime, shortTime} from '../apis/mappers/fragment';
+import {getTodayMood, getMoodHistory, moodToDailyStatus, moodToHistorical} from '../apis/requests/mood';
 import {HomeFilterSheet, type SortBy, type MediaType} from '../components/HomeFilterSheet';
+import {HomeDeviceButton} from '../components/HomeDeviceButton';
+import {TransferBadge} from '../screens/hardware/TransferBadge';
 import {WELCOME_MEMORY, DEMO_MEMORIES, DAILY_STATUS, HISTORICAL_MEMORIES} from '../data/mock';
-import type {MemoryCard as MemoryCardModel, TimelineRecord} from '../types/memory';
+import type {MemoryCard as MemoryCardModel, DailyStatus, HistoricalMemory} from '../types/memory';
 
 /** 记忆碎片每页条数：首屏与后续滚动加载共用。 */
 const PAGE_SIZE = 20;
-
-/** Minutes-since-midnight for sorting; non-time labels sort last. */
-function parseTime(t?: string): number {
-  if (!t) return -1;
-  const m = t.match(/(\d{1,2}):(\d{2})/);
-  if (!m) return t.includes('刚刚') ? 24 * 60 + 1 : -1;
-  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-}
 
 /** Date-label portion of a card.time ('今天 09:00' → '今天'); '' when undated. */
 function dateOf(time?: string): string {
@@ -60,99 +56,6 @@ function normalizeDateStr(d: string): string {
   return d.split(' ')[0].replace(/-/g, '.');
 }
 
-function shortTime(time?: string): string {
-  if (!time) return '';
-  const part = time.split(' ')[1] || '';
-  return part.split(':').slice(0, 2).join(':');
-}
-
-/** 'YYYY-MM-DD HH:MM:SS' → '今天 HH:MM' / '昨天 HH:MM' / 'YYYY.MM.DD HH:MM'（含空格，供 feed 分组）。 */
-function formatFragmentTime(ts?: string): string {
-  if (!ts) return '';
-  const [datePart, timePart = ''] = ts.split(' ');
-  const hhmm = timePart.split(':').slice(0, 2).join(':');
-  const today = new Date();
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (datePart === fmt(today)) return `今天 ${hhmm}`;
-  if (datePart === fmt(yesterday)) return `昨天 ${hhmm}`;
-  return `${datePart.replace(/-/g, '.')} ${hhmm}`;
-}
-
-/** files[].meta.duration_ms（毫秒）→ 'm:ss'；无效返回 undefined（时间流回落 0:00）。 */
-function durationFromMeta(meta: Record<string, unknown> | null): string | undefined {
-  const raw = meta?.duration_ms;
-  const ms = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-  if (!isFinite(ms) || ms <= 0) {
-    return undefined;
-  }
-  const s = Math.round(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-/** 记忆碎片 → 首页/详情页共用的 MemoryCard 模型。 */
-function fragmentToCard(f: MemoryFragment): MemoryCardModel {
-  const files = f.files || [];
-  const imageFiles = files.filter(m => m.mime_type?.startsWith('image'));
-  const audioFiles = files.filter(m => m.mime_type?.startsWith('audio'));
-  const images = imageFiles.map(m => m.url);
-
-  // 时间流：AI 概要 → 文本节点（默认「高光」视图）；图片 files → 图片节点、录音 files → 音频节点
-  // （「全量」视图里图片直接铺图、录音可播放），转写/描述放在 content，仿原型 renderTimelineNode。
-  const timeline = f.timeline || [];
-  const records: TimelineRecord[] = timeline.map((t, i) => ({
-    id: i,
-    time: t.time,
-    type: 'text',
-    content: t.content,
-  }));
-  // files 无独立时间，按序等比锚定到概要时间点，保证「全量」视图里大致按时序排列。
-  const anchorTime = (i: number, count: number) =>
-    timeline.length
-      ? timeline[Math.min(timeline.length - 1, Math.floor((i * timeline.length) / count))].time
-      : shortTime(f.start_time);
-  imageFiles.forEach((m, i) => {
-    records.push({
-      id: timeline.length + i,
-      time: anchorTime(i, imageFiles.length),
-      type: 'image',
-      url: m.url,
-      content: m.description || undefined,
-      name: m.file_name || undefined,
-    });
-  });
-  audioFiles.forEach((m, i) => {
-    records.push({
-      id: timeline.length + imageFiles.length + i,
-      time: anchorTime(i, audioFiles.length),
-      type: 'audio',
-      name: `语音记录 ${i + 1}`,
-      content: m.description || undefined,
-      url: m.url,
-      duration: durationFromMeta(m.meta),
-    });
-  });
-  const timelineRecords = records.sort((a, b) => parseTime(a.time) - parseTime(b.time));
-
-  return {
-    id: f.id,
-    type: 'memory',
-    tag: f.keywords?.[0] || '记忆',
-    time: formatFragmentTime(f.start_time),
-    title: f.title,
-    content: f.brief,
-    hasAI: true,
-    tags: f.keywords || [],
-    images: images.length ? images : undefined,
-    image: images[0],
-    audioCount: audioFiles.length || undefined,
-    updateTime: shortTime(f.update_time) || undefined,
-    timelineRecords,
-  };
-}
-
 /**
  * 首页 hub — frosted header + 记忆碎片 feed (mood card under 今天, historical
  * cards for past days, memory cards with left-swipe) + floating FAB capsule.
@@ -184,6 +87,9 @@ export function HomeHub() {
   // 是否成功载入过真实数据：用于区分「真的没有」与「接口请求失败」，失败时不清空已有内容。
   const hasDataRef = useRef(false);
   const [loadError, setLoadError] = useState(false);
+  // 真实情绪卡：今日 + 历史（按日期匹配）。null/空时回落 mock，不影响碎片列表。
+  const [todayMood, setTodayMood] = useState<DailyStatus | null>(null);
+  const [moodHistory, setMoodHistory] = useState<HistoricalMemory[]>([]);
 
   useEffect(() => () => {
     mountedRef.current = false;
@@ -207,6 +113,13 @@ export function HomeHub() {
     inFlightRef.current = true;
     setLoading(true);
     setLoadError(false);
+    // 情绪卡（今日 + 历史）与碎片列表并行拉取；失败静默回落 mock，不阻断首页。
+    getTodayMood()
+      .then(m => mountedRef.current && setTodayMood(m ? moodToDailyStatus(m) : null))
+      .catch(() => {});
+    getMoodHistory(1, 14)
+      .then(r => mountedRef.current && setMoodHistory((r.items || []).map(moodToHistorical)))
+      .catch(() => {});
     searchMemoryFragments({page: 1, pageSize: PAGE_SIZE})
       .then(res => {
         if (!mountedRef.current) return;
@@ -311,18 +224,25 @@ export function HomeHub() {
       groups.map((g, gi) => ({
         date: g.date,
         data: g.items,
+        // 优先真实情绪历史卡（按日期匹配）；无则回落 mock。
         historical:
+          moodHistory.find(m => m.date === normalizeDateStr(g.date)) ||
           HISTORICAL_MEMORIES.find(m => m.date === normalizeDateStr(g.date)) ||
           {...HISTORICAL_MEMORIES[gi % HISTORICAL_MEMORIES.length], date: g.date, id: `mock_${gi}`},
       })),
-    [groups],
+    [groups, moodHistory],
   );
 
   const removeCard = (id: string) => setMemories(list => list.filter(c => c.id !== id));
 
   return (
     <View style={styles.root}>
-      <HomeHeader onOpenDrawer={openDrawer} query={query} onChangeQuery={setQuery} />
+      <HomeHeader
+        onOpenDrawer={openDrawer}
+        query={query}
+        onChangeQuery={setQuery}
+        right={<HomeDeviceButton />}
+      />
       <SectionList
         sections={sections}
         keyExtractor={item => item.id}
@@ -367,9 +287,11 @@ export function HomeHub() {
             <Text style={styles.dateLabel}>{section.date}</Text>
             {searching || isEmpty ? null : section.date === '今天' ? (
               <MoodCard
-                data={DAILY_STATUS}
+                data={isGuest ? DAILY_STATUS : todayMood ?? DAILY_STATUS}
                 isGuest={isGuest}
-                onPress={() => (isGuest ? undefined : nav.push('dailyStatus', {data: DAILY_STATUS}))}
+                onPress={() =>
+                  isGuest ? undefined : nav.push('dailyStatus', {data: todayMood ?? DAILY_STATUS})
+                }
                 onOpenHistorical={h => nav.push('historical', {data: h})}
               />
             ) : !isGuest ? (
@@ -422,6 +344,10 @@ export function HomeHub() {
         mediaType={mediaType}
         onMediaType={setMediaType}
       />
+
+      {/* 记忆粒同步 / WiFi 快传进度浮标（读全局 useMr20，与设备页共用一套状态）。
+          抬高到 FAB 胶囊之上，避免与底部悬浮按钮重叠。 */}
+      <TransferBadge bottom={120} />
     </View>
   );
 }

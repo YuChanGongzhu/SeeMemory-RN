@@ -56,7 +56,7 @@ function WifiSteps({steps}: {steps: Record<WifiConnectStep, WifiStepState>}) {
   );
 }
 
-export function TransferBadge() {
+export function TransferBadge({bottom = 28}: {bottom?: number} = {}) {
   const {
     syncing,
     syncProgress,
@@ -121,7 +121,7 @@ export function TransferBadge() {
   const tint = done ? HW.green : failed || kind === 'manual' ? HW.red : HW.blue;
 
   return (
-    <View style={st.wrap} pointerEvents="box-none">
+    <View style={[st.wrap, {bottom}]} pointerEvents="box-none">
       {expanded ? (
         <View style={st.card}>
           <View style={st.cardHead}>
