@@ -83,12 +83,16 @@ export async function connectWifi(
  * 释放手机侧热点配置。**不主动发 WIFIC**——设备 30s 无连接会自动关、BLE 断也会关；
  * 频繁 WIFIO/WIFIC 反复开关会触发 WiFi 模组卡死（见 data/测试报告.md），故收尾少折腾。
  */
-export async function disconnectWifi(_client: Mr20Client): Promise<void> {
+export async function disconnectWifi(client: Mr20Client): Promise<void> {
+  // 1) 手机侧退出设备热点网络（iOS removeConfiguration 后系统自动回连此前 WiFi）。
   // 原生未更新时 wifiLeave 为 undefined，直接调用会同步抛错；先判存在再调。
   const leaveFn = (Mr20Native as {wifiLeave?: typeof Mr20Native.wifiLeave}).wifiLeave;
   if (typeof leaveFn === 'function') {
     await Mr20Native.wifiLeave().catch(() => undefined);
   }
+  // 2) 设备侧关闭热点（BLE WIFIC），传输/取消结束后省设备电量。之前只退了手机网络、
+  // 没关设备热点，导致「传输结束后设备热点一直开着」。失败忽略（可能已关/断连）。
+  await client.closeWifi().catch(() => undefined);
 }
 
 export interface WifiSyncOptions {

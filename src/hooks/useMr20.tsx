@@ -52,6 +52,7 @@ import {
   deleteAllLocalFiles,
   deleteLocalFiles,
   listAllDeviceFiles as listAllDeviceFilesSvc,
+  listPendingFiles,
   scanDeviceFiles,
   syncAllFiles,
   syncFiles,
@@ -145,6 +146,8 @@ interface Mr20ContextType {
   getHotspotInfo: () => Promise<{ssid: string; pwd: string; state: number} | null>;
   // WiFi 快传：传入用户勾选的文件子集，自动走「开热点→入网→逐个收流→入库」。
   startWifiTransfer: (files: Mr20File[]) => Promise<void>;
+  // WiFi 快传「全部待同步」（首页一键快传用）：内部列出未同步文件后走 startWifiTransfer。
+  startWifiTransferPending: () => Promise<void>;
   // 自动入网失败后，用户已手动连上热点，点此继续传输。
   continueWifiAfterManualJoin: () => Promise<void>;
   cancelWifiTransfer: () => void;
@@ -204,6 +207,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   closeHotspot: noop,
   getHotspotInfo: async () => null,
   startWifiTransfer: noop,
+  startWifiTransferPending: noop,
   continueWifiAfterManualJoin: noop,
   cancelWifiTransfer: () => {},
   resetWifiTransfer: () => {},
@@ -606,6 +610,46 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     [runWifiTransferLoop],
   );
 
+  // WiFi 快传「全部待同步」：先按已同步集合列出未传文件（与设备主页红点/待同步数同口径），
+  // 再走 startWifiTransfer（自动开热点→入网→收流；自动入网失败由 TransferBadge 引导手动连）。
+  const startWifiTransferPending = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || connStateRef.current !== 'connected') {
+      return;
+    }
+    if (!isMr20WifiAvailable) {
+      setError('WiFi 快传需要更新原生模块：请 cd ios && pod install 后重新编译运行 App。');
+      setWifiPhase('error');
+      return;
+    }
+    // 立即反馈：先进入「连接中」态，让 TransferBadge 立刻出现「连接设备热点…」，
+    // 避免「点了 WiFi 快传后要过好几秒（BLE 列文件）才有反应」。
+    setError(null);
+    setWifiSummary(null);
+    setWifiProgress(null);
+    setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+    wifiCancelRef.current = false; // 清除上一次残留的取消标志
+    setWifiPhase('connecting');
+    let pending: Mr20File[] = [];
+    try {
+      pending = await listPendingFiles(client);
+    } catch (e) {
+      setError(String((e as Error)?.message || e));
+      setWifiPhase('error');
+      return;
+    }
+    // 列文件期间用户在浮标上点了取消 → 就此打住，别再启动传输。
+    if (wifiCancelRef.current) {
+      setWifiPhase('idle');
+      return;
+    }
+    if (!pending.length) {
+      setWifiPhase('idle'); // 无待同步，收起浮标
+      return;
+    }
+    await startWifiTransfer(pending);
+  }, [startWifiTransfer]);
+
   // 用户已手动连上热点 → 继续传输（沿用上次勾选的文件）。
   const continueWifiAfterManualJoin = useCallback(async () => {
     const client = clientRef.current;
@@ -958,8 +1002,19 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       connectAndPair(target.id, target.name)
         .then(async () => {
           // 首页没有 HardwarePage 的「连上拉状态」effect，这里补一次。
-          await refreshStatus().catch(() => undefined);
-          await refreshDeviceFiles().catch(() => undefined);
+          // 注意：不能调用 provider 的 refreshStatus/refreshDeviceFiles —— 它们在自动重连
+          // 启动时（connState 还是 'idle'）被闭包捕获，内部 connState 守卫会判「未连接」而空转，
+          // 导致首页电量/存储/待同步一直为空、要进设备页才刷新。故这里绕过守卫直连 client。
+          const c = clientRef.current;
+          if (!c) {
+            return;
+          }
+          await c.refreshStatus().catch(() => undefined);
+          try {
+            setDeviceFiles(await scanDeviceFiles(c, () => transferActiveRef.current));
+          } catch {
+            // 静默
+          }
         })
         .catch(() => setError(null)); // 静默：不在首页弹错误横幅
     });
@@ -979,7 +1034,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         cleanup();
       }
     }
-  }, [getClient, connectAndPair, refreshStatus, refreshDeviceFiles]);
+  }, [getClient, connectAndPair]);
 
   // 挂载后自动尝试一次重连（内部有 ref/idle/BLE 门控，重复调用安全幂等）。
   useEffect(() => {
@@ -1043,6 +1098,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     closeHotspot,
     getHotspotInfo,
     startWifiTransfer,
+    startWifiTransferPending,
     continueWifiAfterManualJoin,
     cancelWifiTransfer,
     resetWifiTransfer,

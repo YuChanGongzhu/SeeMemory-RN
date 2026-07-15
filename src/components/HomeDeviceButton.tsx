@@ -21,12 +21,14 @@ import {
   ChevronRight,
   HardDrive,
   Mic,
+  Wifi,
 } from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {IconButton} from '../ui/kit';
 import {BottomSheet} from '../ui/BottomSheet';
 import {useNav} from '../navigation/nav';
 import {useMr20} from '../hooks/useMr20';
+import {isMr20WifiAvailable} from '../native/mr20/Mr20Native';
 
 function fmtStorage(freeMb?: number): string | null {
   if (freeMb == null) {
@@ -50,6 +52,7 @@ export function HomeDeviceButton() {
     deviceFiles,
     connectedDevice,
     syncNow,
+    startWifiTransferPending,
     hasPaired,
     reconnectSaved,
   } = useMr20();
@@ -90,9 +93,17 @@ export function HomeDeviceButton() {
     reconnectSaved(true).catch(() => undefined);
   };
 
+  // 蓝牙同步：内部扫盘同步全部待传，无需预先列文件。
   const doSync = () => {
     setOpen(false);
     syncNow().catch(() => undefined);
+  };
+
+  // WiFi 快传：列出待同步文件后开热点快传；自动入网失败的「去系统设置/我已连接」
+  // 引导由已挂在首页的 TransferBadge 承接。
+  const doWifiSync = () => {
+    setOpen(false);
+    startWifiTransferPending().catch(() => undefined);
   };
 
   const deviceName = connectedDevice?.name || 'MR20 记忆粒';
@@ -149,19 +160,33 @@ export function HomeDeviceButton() {
               </View>
             </View>
 
-            {/* 待同步提示 + 一键同步 */}
+            {/* 待同步：两种传输方式二选一（蓝牙同步 / WiFi 快传） */}
             {pending > 0 ? (
-              <TouchableOpacity
-                style={st.primaryBtn}
-                activeOpacity={0.85}
-                onPress={doSync}
-                disabled={transferring}>
-                <Text style={st.primaryText}>
-                  {transferring
-                    ? '正在同步…'
-                    : `立即同步 ${pending} 段新录音`}
+              <>
+                <Text style={st.syncHint}>
+                  {transferring ? '正在传输录音…' : `${pending} 段新录音待同步`}
                 </Text>
-              </TouchableOpacity>
+                <View style={st.syncRow}>
+                  <TouchableOpacity
+                    style={[st.syncBtn, st.syncBtnDark]}
+                    activeOpacity={0.85}
+                    onPress={doSync}
+                    disabled={transferring}>
+                    <Bluetooth size={17} color="#fff" strokeWidth={2} />
+                    <Text style={st.syncBtnDarkText}>蓝牙同步</Text>
+                  </TouchableOpacity>
+                  {isMr20WifiAvailable ? (
+                    <TouchableOpacity
+                      style={[st.syncBtn, st.syncBtnLight]}
+                      activeOpacity={0.85}
+                      onPress={doWifiSync}
+                      disabled={transferring}>
+                      <Wifi size={17} color={colors.auraProject} strokeWidth={2} />
+                      <Text style={st.syncBtnLightText}>WiFi 快传</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </>
             ) : (
               <View style={st.noNew}>
                 <Text style={st.noNewText}>
@@ -282,6 +307,26 @@ const st = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+
+  syncHint: {fontSize: 13, color: colors.textSub, marginBottom: 10, textAlign: 'center'},
+  syncRow: {flexDirection: 'row', gap: 12},
+  syncBtn: {
+    flex: 1,
+    height: 52,
+    borderRadius: radius.xxl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  syncBtnDark: {backgroundColor: colors.dark},
+  syncBtnDarkText: {color: '#fff', fontSize: 15, fontWeight: '700'},
+  syncBtnLight: {
+    backgroundColor: colors.bgApp,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  syncBtnLightText: {color: colors.textMain, fontSize: 15, fontWeight: '700'},
   noNew: {alignItems: 'center', paddingVertical: 8},
   noNewText: {fontSize: 14, color: colors.textSub},
 
