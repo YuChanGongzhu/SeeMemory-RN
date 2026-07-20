@@ -1,12 +1,13 @@
 /**
- * 时间校准 —— 「一键校准」走真实 BLE syncTime()；设备当前时间无读取接口，
- * 用模拟串展示（校准成功后对齐到手机时间），手机时间为真实实时。
+ * 时间校准 —— 「一键校准」走真实 BLE syncTime()；设备当前时间用 GT 指令实时读取
+ * （进页面读一次，校准后再读一次），读不到时显示 —；手机时间为真实实时。
  */
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {Loader2} from 'lucide-react-native';
 import {SubHeader, HW} from './parts';
 import {useMr20} from '../../hooks/useMr20';
+import {parseDeviceTime} from '../../native/mr20/protocol';
 
 function fmtNow(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -14,10 +15,10 @@ function fmtNow(d: Date): string {
 }
 
 export function TimeSync({onBack}: {onBack: () => void}) {
-  const {syncTime} = useMr20();
+  const {connState, syncTime, getDeviceTime} = useMr20();
   const [phoneTime, setPhoneTime] = useState(fmtNow(new Date()));
-  // 设备时间初值用一个明显偏差的模拟串，校准后对齐手机时间。
-  const [deviceTime, setDeviceTime] = useState('2023年08月12日 09:15:30');
+  // 设备时间由 GT 实时读取；读不到（未连/超时/无应答）显示 —。
+  const [deviceTime, setDeviceTime] = useState('—');
   const [calibrating, setCalibrating] = useState(false);
   const tick = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -30,11 +31,29 @@ export function TimeSync({onBack}: {onBack: () => void}) {
     };
   }, []);
 
+  // 读一次设备真实时间（GT → yyyymmddhhmmss），成功则展示，失败保持 —。
+  const readDeviceTime = useCallback(async () => {
+    const raw = await getDeviceTime();
+    const d = parseDeviceTime(raw);
+    if (d) {
+      setDeviceTime(fmtNow(d));
+    }
+  }, [getDeviceTime]);
+
+  // 进页面且已连接时读一次设备当前时间。
+  useEffect(() => {
+    if (connState !== 'connected') {
+      return;
+    }
+    readDeviceTime().catch(() => undefined);
+  }, [connState, readDeviceTime]);
+
   const calibrate = async () => {
     setCalibrating(true);
     try {
       await syncTime();
-      setDeviceTime(fmtNow(new Date()));
+      // 校准后重读设备时间确认已对齐；读不到则退回手机时间。
+      await readDeviceTime().catch(() => setDeviceTime(fmtNow(new Date())));
       Alert.alert('时间校准成功');
     } catch (e) {
       Alert.alert('校准失败', String((e as Error)?.message || e));

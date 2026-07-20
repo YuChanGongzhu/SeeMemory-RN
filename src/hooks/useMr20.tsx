@@ -19,13 +19,14 @@ import {
   Mr20File,
   Mr20Status,
 } from '../native/mr20/Mr20Client';
-import {Mr20Native, isMr20NativeAvailable, isMr20WifiAvailable} from '../native/mr20/Mr20Native';
+import {isMr20NativeAvailable, isMr20WifiAvailable} from '../native/mr20/Mr20Native';
 import {MR20_PAIR_KEY} from '../native/mr20/protocol';
 import {
   clearBatchGroupId,
   clearPairedDevice,
   clearSyncedSet,
   getBatchGroupId,
+  getSyncedSet,
   getPairedDevice,
   savePairedDevice,
   saveBatchGroupId,
@@ -50,6 +51,7 @@ import {
 } from '../services/audioBatch';
 import {
   deleteAllLocalFiles,
+  deleteDeviceFiles as deleteDeviceFilesSvc,
   deleteLocalFiles,
   listAllDeviceFiles as listAllDeviceFilesSvc,
   listPendingFiles,
@@ -58,6 +60,8 @@ import {
   syncFiles,
   Mr20DeviceFiles,
   SyncProgress,
+  DeleteProgress,
+  DeleteFileResult,
 } from '../services/mr20Sync';
 import {
   connectWifi,
@@ -108,6 +112,9 @@ interface Mr20ContextType {
   // 同步
   syncing: boolean;
   syncProgress: SyncProgress | null;
+  // 删除设备文件（同样独占 BLE）
+  deletingDevice: boolean;
+  deleteProgress: DeleteProgress | null;
   // WiFi 快传
   wifiPhase: WifiPhase;
   wifiSteps: Record<WifiConnectStep, WifiStepState>;
@@ -138,12 +145,18 @@ interface Mr20ContextType {
   // 同步勾选的设备文件子集到「我的录音」（设备文件浏览页用）。
   syncSelected: (files: Mr20File[]) => Promise<void>;
   stopSync: () => void;
+  // 删除**设备上**的录音文件（腾设备空间）。注意与 deleteItems 区分：后者只删手机本地。
+  // 返回逐文件结果，供调用方 splice 自己的列表并报告部分失败。
+  deleteDeviceFiles: (files: Mr20File[]) => Promise<DeleteFileResult[]>;
+  stopDeleteDeviceFiles: () => void;
   // 列出设备上「全部」录音文件（设备文件浏览页用，含已传输，可重传覆盖本地）。
   listAllDeviceFiles: () => Promise<Mr20File[]>;
-  // WiFi 热点管理（WifiManage 页用）：开/关热点、读当前 SSID/密码/状态。
+  // WiFi 热点管理（WifiManage 页用）：开/关热点、读当前 SSID/密码/状态、改名改密。
   openHotspot: () => Promise<void>;
   closeHotspot: () => Promise<void>;
   getHotspotInfo: () => Promise<{ssid: string; pwd: string; state: number} | null>;
+  // 修改热点 SSID/密码（WIFI&CH，改后设备会复位）。
+  changeHotspot: (ssid: string, pwd: string) => Promise<void>;
   // WiFi 快传：传入用户勾选的文件子集，自动走「开热点→入网→逐个收流→入库」。
   startWifiTransfer: (files: Mr20File[]) => Promise<void>;
   // WiFi 快传「全部待同步」（首页一键快传用）：内部列出未同步文件后走 startWifiTransfer。
@@ -164,6 +177,10 @@ interface Mr20ContextType {
   refreshStatus: () => Promise<void>;
   refreshInbox: () => Promise<void>;
   syncTime: () => Promise<void>;
+  // 读取设备当前时间（GT），返回原始 14 位串 yyyymmddhhmmss；读不到为空串。
+  getDeviceTime: () => Promise<string>;
+  // MCU OTA 升级：传入固件字节，流式发送并回调进度（sent/total 字节）。
+  runOtaMcu: (bin: Uint8Array, onProgress?: (sent: number, total: number) => void) => Promise<void>;
   forgetDevice: () => Promise<void>;
   factoryReset: () => Promise<void>;
   clearError: () => void;
@@ -181,6 +198,8 @@ const Mr20Context = createContext<Mr20ContextType>({
   recording: null,
   syncing: false,
   syncProgress: null,
+  deletingDevice: false,
+  deleteProgress: null,
   wifiPhase: 'idle',
   wifiSteps: {open: 'pending', join: 'pending', reachable: 'pending'},
   wifiProgress: null,
@@ -202,10 +221,13 @@ const Mr20Context = createContext<Mr20ContextType>({
   syncNow: noop,
   syncSelected: noop,
   stopSync: () => {},
+  deleteDeviceFiles: async () => [],
+  stopDeleteDeviceFiles: () => {},
   listAllDeviceFiles: async () => [],
   openHotspot: noop,
   closeHotspot: noop,
   getHotspotInfo: async () => null,
+  changeHotspot: noop,
   startWifiTransfer: noop,
   startWifiTransferPending: noop,
   continueWifiAfterManualJoin: noop,
@@ -223,6 +245,8 @@ const Mr20Context = createContext<Mr20ContextType>({
   refreshStatus: noop,
   refreshInbox: noop,
   syncTime: noop,
+  getDeviceTime: async () => '',
+  runOtaMcu: noop,
   forgetDevice: noop,
   factoryReset: noop,
   clearError: () => {},
@@ -265,6 +289,9 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const [recording, setRecording] = useState<{fname: string; seconds: number} | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // 删除**设备上**的录音（与 deleteItems 的「删本地」不同）：同样独占 BLE，故单独计状态。
+  const [deletingDevice, setDeletingDevice] = useState(false);
+  const [deleteProgress, setDeleteProgress] = useState<DeleteProgress | null>(null);
   const [wifiPhase, setWifiPhase] = useState<WifiPhase>('idle');
   const [wifiSteps, setWifiSteps] = useState<Record<WifiConnectStep, WifiStepState>>({
     open: 'pending',
@@ -281,6 +308,12 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [hasPaired, setHasPaired] = useState(false);
+  // OTA 进行中：独占 BLE，期间不刷新状态/不扫描/不自动重连（协议要求 OTA 期间禁发其他指令）。
+  const [otaActive, setOtaActive] = useState(false);
+  const otaActiveRef = useRef(false);
+  useEffect(() => {
+    otaActiveRef.current = otaActive;
+  }, [otaActive]);
 
   // 批处理轮询：activeGroupRef 标记当前正在轮询的 groupId（新批次会顶掉旧的）。
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -289,6 +322,12 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const lastResultCompletedRef = useRef(0);
   // 同步中断标志：stopSync 置 true，syncAllFiles 每个文件前检查并停下。
   const syncCancelRef = useRef(false);
+  // 设备删除中断标志 + 实时镜像（供 runSync/startWifiTransfer 读，避免闭包旧值）。
+  const deleteCancelRef = useRef(false);
+  const deletingDeviceRef = useRef(false);
+  useEffect(() => {
+    deletingDeviceRef.current = deletingDevice;
+  }, [deletingDevice]);
   // WiFi 快传中断标志 + 待传文件（手动入网后续传用）。
   const wifiCancelRef = useRef(false);
   const wifiFilesRef = useRef<Mr20File[]>([]);
@@ -298,10 +337,12 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   useEffect(() => {
     transferActiveRef.current =
       syncing ||
+      otaActive ||
+      deletingDevice ||
       wifiPhase === 'connecting' ||
       wifiPhase === 'transferring' ||
       wifiPhase === 'manual';
-  }, [syncing, wifiPhase]);
+  }, [syncing, otaActive, deletingDevice, wifiPhase]);
 
   // 自动重连：每个 App 会话只自动跑一次；connStateRef 供重连状态机读取实时连接态
   // （避免闭包读到旧值）。
@@ -438,7 +479,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   // 避免列目录命令与同步/状态查询的命令-应答交错。
   const refreshDeviceFiles = useCallback(async () => {
     const client = clientRef.current;
-    if (!client || connState !== 'connected' || syncing) {
+    if (
+      !client ||
+      connState !== 'connected' ||
+      syncing ||
+      deletingDevice ||
+      otaActiveRef.current
+    ) {
       return;
     }
     try {
@@ -448,13 +495,17 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     } catch (e) {
       setError(String((e as Error)?.message || e));
     }
-  }, [connState, syncing]);
+  }, [connState, syncing, deletingDevice]);
 
   // 同步执行体：files 为空 = 全部待同步（syncAllFiles）；否则 = 勾选的子集（syncFiles）。
   const runSync = useCallback(
     async (files?: Mr20File[]) => {
       const client = clientRef.current;
       if (!client) {
+        return;
+      }
+      if (deletingDeviceRef.current) {
+        setError('正在删除设备录音，请稍后再传输。');
         return;
       }
       setError(null);
@@ -498,6 +549,74 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     clientRef.current?.abortTransfer().catch(() => undefined);
   }, []);
 
+  /**
+   * 删除**设备上**的录音文件（腾设备空间），手机里已传输的录音不受影响。
+   * 返回逐文件结果：调用方（设备文件页）的列表只在挂载时加载一次、之后不重拉，
+   * 需要靠它 splice 本地列表并报告部分失败，故这里不返回 void。
+   */
+  const deleteDeviceFiles = useCallback(
+    async (files: Mr20File[]): Promise<DeleteFileResult[]> => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected' || !files.length) {
+        return [];
+      }
+      if (transferActiveRef.current) {
+        setError('正在传输中，请等传输结束后再删除设备录音。');
+        return [];
+      }
+      // 正在录制的那条不删：设备还在写它，固件多半回 D&ERR。提前剔除，把一个莫名失败变成 no-op。
+      // （recording 只有 fname 没有 dir，只能按文件名比。）
+      const targets = files.filter(f => f.fname !== recording?.fname);
+      if (!targets.length) {
+        return [];
+      }
+
+      setError(null);
+      deleteCancelRef.current = false;
+      setDeletingDevice(true);
+      setDeleteProgress({total: targets.length, completed: 0});
+      try {
+        // 先取已同步集合：删完再取算不出哪些原本是「待同步」。
+        const synced = await getSyncedSet();
+        const results = await deleteDeviceFilesSvc(client, targets, {
+          onProgress: p => setDeleteProgress(p),
+          shouldCancel: () => deleteCancelRef.current,
+        });
+        const okFiles = results.filter(r => r.ok).map(r => r.file);
+        const okBytes = okFiles.reduce((n, f) => n + (f.size || 0), 0);
+        // 删已传输的文件只减 total/bytes，不动 pending。
+        const okPending = okFiles.filter(
+          f => !synced.has(`${f.dir}/${f.fname}`),
+        ).length;
+        // 乐观本地递减，不做昂贵的 BLE 全盘重扫（同 runSync 的收尾方式）。
+        setDeviceFiles(prev =>
+          prev
+            ? {
+                total: Math.max(0, prev.total - okFiles.length),
+                pending: Math.max(0, prev.pending - okPending),
+                bytes: Math.max(0, prev.bytes - okBytes),
+              }
+            : prev,
+        );
+        return results;
+      } catch (e) {
+        setError(String((e as Error)?.message || e));
+        return [];
+      } finally {
+        setDeletingDevice(false);
+        setDeleteProgress(null);
+      }
+    },
+    [connState, recording],
+  );
+
+  // 中断设备删除。与 stopSync 不同，**没有 abortTransfer 的对应物**——协议无法打断已发出的
+  // D 指令，所以只在下一个文件边界生效，当前这条若卡住最多再等 8s（应答超时）。
+  // UI 必须等 deletingDevice 翻 false 才收状态，不能乐观提前关闭。
+  const stopDeleteDeviceFiles = useCallback(() => {
+    deleteCancelRef.current = true;
+  }, []);
+
   // -------------------------------------------------------------------------
   // WiFi 快传
   // -------------------------------------------------------------------------
@@ -529,6 +648,17 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     const cred = await client.getWifiCredentials().catch(() => ({ssid: '', pwd: ''}));
     return {ssid: cred.ssid, pwd: cred.pwd, state};
   }, [connState]);
+  // 改名/改密：发 WIFI&CH 后轮询 WIFIS 确认（改后设备会复位）。
+  const changeHotspot = useCallback(
+    async (ssid: string, pwd: string) => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected') {
+        throw new Error('请先连接设备蓝牙');
+      }
+      await client.changeWifiCredentials(ssid, pwd);
+    },
+    [connState],
+  );
 
   // 传输循环（连接就绪后调用）：逐个 WiFi 收流落盘 → 登记入库 → 汇总。
   const runWifiTransferLoop = useCallback(
@@ -575,6 +705,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     async (files: Mr20File[]) => {
       const client = clientRef.current;
       if (!client || !files.length) {
+        return;
+      }
+      if (deletingDeviceRef.current) {
+        setError('正在删除设备录音，请稍后再传输。');
         return;
       }
       // 原生未更新（未 pod install + 重新编译）时，wifiJoin/wifiReceiveFile 不存在，
@@ -874,6 +1008,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
 
   // 清除本地缓存：清「已同步」集合 + 收件箱 + 批处理记录，使下次同步全量重拉。
   // 修了解码 bug 后，之前下坏的文件需要这样清掉再重新同步。
+  // ⚠️ 对已用 deleteDeviceFiles 从设备删掉的录音，这一步是**不可逆**的——设备上已无副本可重拉。
   const clearLocalCache = useCallback(async () => {
     syncCancelRef.current = true;
     activeGroupRef.current = null;
@@ -936,7 +1071,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    if (clientRef.current && connState === 'connected') {
+    if (clientRef.current && connState === 'connected' && !otaActiveRef.current) {
       await clientRef.current.refreshStatus();
     }
   }, [connState]);
@@ -953,29 +1088,43 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     if (!force) {
       reconnectStartedRef.current = true;
     }
+    // 因「暂时性」原因放弃时要把占位还回去，否则烧掉了本会话唯一一次自动重连机会。
+    const releaseLatch = () => {
+      if (!force) {
+        reconnectStartedRef.current = false;
+      }
+    };
     if (!isMr20NativeAvailable) {
-      return; // 原生未链接（模拟器/未构建）
+      return; // 原生未链接（模拟器/未构建）：本会话不可能好转，保持占位
     }
     if (connStateRef.current !== 'idle') {
-      return; // 用户已在手动扫描/连接，让位
+      releaseLatch();
+      return; // 用户已在手动扫描/连接，让位（其手动流程失败回 idle 后仍可自动重试）
     }
     let saved: Awaited<ReturnType<typeof getPairedDevice>>;
     try {
       saved = await getPairedDevice();
     } catch {
+      releaseLatch(); // 读盘偶发失败，不该赔上整个会话
       return;
     }
     if (!saved?.id) {
-      return; // 未配对过
+      return; // 未配对过：保持占位
     }
-    let ble: string;
+    // 冷启动时 CoreBluetooth 先报 unknown，几百毫秒后才转 poweredOn。这里必须**等**而不是
+    // 立刻放弃——早先直接读 getBleState() 撞上 unknown 就 return，而占位已置，导致整个 App
+    // 会话再也不自动重连（表现为设备明明就在旁边、手动扫得到 -55dBm，弹层却说「不在附近，
+    // 或蓝牙未开启」）。ensurePoweredOn 会监听 onBleState 等到就绪（最多 6s）。
     try {
-      ble = await Mr20Native.getBleState();
+      await getClient().ensurePoweredOn();
     } catch {
+      releaseLatch(); // 蓝牙真的关着/未授权：用户开了之后还能再自动试
       return;
     }
-    if (ble !== 'poweredOn') {
-      return; // 蓝牙未开/未授权：自动尝试作罢，用户可用弹层「重新连接」手动重试
+    // 等待期间用户可能自己发起了扫描/连接，重新让位。
+    if (connStateRef.current !== 'idle') {
+      releaseLatch();
+      return;
     }
 
     const client = getClient();
@@ -1046,6 +1195,34 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     await clientRef.current?.syncTime();
   }, []);
 
+  // 读取设备当前时间（GT）；未连接/读不到返回空串，交 UI 兜底。
+  const getDeviceTime = useCallback(async (): Promise<string> => {
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      return '';
+    }
+    return client.getTime().catch(() => '');
+  }, [connState]);
+
+  // MCU OTA：置 otaActive 独占 BLE（暂停状态刷新/扫描/重连）→ 流式发送固件 → 收尾。
+  // 成功后设备复位断连，随后自动重连的 connect-effect 会回读新 FW 版本。
+  const runOtaMcu = useCallback(
+    async (bin: Uint8Array, onProgress?: (sent: number, total: number) => void) => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected') {
+        throw new Error('请先连接设备');
+      }
+      setError(null);
+      setOtaActive(true);
+      try {
+        await client.otaUpdateMcu(bin, {onProgress});
+      } finally {
+        setOtaActive(false);
+      }
+    },
+    [connState],
+  );
+
   // 解除绑定：仅清本地配对关系 + 断开，不发 BLE&RESET（不格式化设备、不删已下载录音），
   // 符合原型「解除后已下载到手机的录音不会被删除」。设备被别的密钥锁住时另走 clearPairing。
   const forgetDevice = useCallback(async () => {
@@ -1072,6 +1249,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     recording,
     syncing,
     syncProgress,
+    deletingDevice,
+    deleteProgress,
     wifiPhase,
     wifiSteps,
     wifiProgress,
@@ -1093,10 +1272,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     syncNow,
     syncSelected,
     stopSync,
+    deleteDeviceFiles,
+    stopDeleteDeviceFiles,
     listAllDeviceFiles,
     openHotspot,
     closeHotspot,
     getHotspotInfo,
+    changeHotspot,
     startWifiTransfer,
     startWifiTransferPending,
     continueWifiAfterManualJoin,
@@ -1114,6 +1296,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     refreshStatus,
     refreshInbox,
     syncTime,
+    getDeviceTime,
+    runOtaMcu,
     forgetDevice,
     factoryReset,
     clearError: () => setError(null),

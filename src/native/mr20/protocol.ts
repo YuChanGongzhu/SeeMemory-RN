@@ -143,6 +143,39 @@ export function formatDeviceTime(date: Date): string {
 }
 
 /**
+ * {@link formatDeviceTime} 的逆函数：解析设备时间串 `yyyymmddhhmmss`（GT 应答 CT&<time>）为 Date。
+ * 长度不足 14 位、含非数字、或月/日/时/分/秒越界一律返回 null（交由 UI 兜底显示 —）。
+ */
+export function parseDeviceTime(s: string): Date | null {
+  const t = (s ?? '').trim();
+  if (!/^\d{14}$/.test(t)) {
+    return null;
+  }
+  const year = Number(t.slice(0, 4));
+  const month = Number(t.slice(4, 6)); // 1~12
+  const day = Number(t.slice(6, 8));
+  const hour = Number(t.slice(8, 10));
+  const min = Number(t.slice(10, 12));
+  const sec = Number(t.slice(12, 14));
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+  if (hour > 23 || min > 59 || sec > 59) {
+    return null;
+  }
+  const d = new Date(year, month - 1, day, hour, min, sec);
+  // 借 Date 归一化反查非法日期（如 2 月 30 日会被进位到 3 月）。
+  if (
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day
+  ) {
+    return null;
+  }
+  return d;
+}
+
+/**
  * 固定 16 位配对密钥。用确定值（而非随机）避免「密钥一旦没存住就再也配不上」：
  * 设备绑定后，之后每次必须发同一个密钥；固定值保证任何时候/任何手机都能对上。
  */
@@ -211,8 +244,21 @@ export const Cmd = {
   getWifi: () => buildCommand('WIFI'),
   /** 查询 WiFi 状态（0~7）。应答 GJJY_DEV&WIFIS&STA。 */
   getWifiState: () => buildCommand('WIFIS'),
+  /**
+   * 修改热点 SSID/密码。协议 R33：GJJY_BLE&WIFI&CH；MCU **不回包**，结果靠轮询 WIFIS 推断
+   * （4=配密码中，6=改完待复位关机）。
+   * ⚠️ 参数拼法（&ssid&pwd）协议未明确，须真机/固件确认；不确定点集中在此一处，方便改。
+   */
+  changeWifi: (ssid: string, pwd: string) => buildCommand('WIFI', 'CH', ssid, pwd),
   /** 获取 WiFi 模组固件版本。 */
   getWifiVersion: () => buildCommand('WF'),
+  // --- OTA 固件升级（MCU）。协议 R42/R44/R61：LEN 固定 6 位（≤999999B≈1MB）。---
+  /** 发起 MCU OTA，len=固件字节数（补足 6 位）。应答 GJJY_DEV&OTA 就绪。 */
+  otaStart: (len: number) => buildCommand('OTA', String(len).padStart(6, '0')),
+  // WiFi 模组 OTA 预留（0703 已把命令名统一为 OTA&WIFI&LEN，非旧 xlsx 的 WIFI&OTA&LEN）：
+  //   otaWifiStart: (len: number) => buildCommand('OTA', 'WIFI', String(len).padStart(6, '0')),
+  /** OTA 固件数据发送完毕。应答 GJJY_DEV&OT&OVER（成功）/ OT&ERR（失败）。 */
+  otaOver: () => buildCommand('OT', 'OVER'),
   /** WiFi 传输文件：App 无该文件时（拉全量）。应答 GJJY_DEV&W&LEN。 */
   wifiFile: (dir: string, fname: string) => buildCommand('W', dir, fname),
   /** WiFi 传输文件：App 已有 size 字节时（断点续传）。 */
@@ -263,6 +309,9 @@ export type DeviceMessage =
   | {type: 'WIFI_CRED'; ssid: string; pwd: string} // WIFI&SSID&PWD：热点凭据
   | {type: 'WIFI_OPENED'} // WIFIO：热点已开
   | {type: 'WIFI_CLOSED'} // WIFIC：热点已关
+  | {type: 'OTA_READY'} // DEV&OTA：设备已就绪，可发固件帧
+  | {type: 'OTA_DONE'} // OT&OVER：固件数据接收完成
+  | {type: 'OTA_ERR'} // OT&ERR：固件数据接收失败
   | {type: 'UNKNOWN'; raw: string; tokens: string[]};
 
 /** 一个收到的帧（已 ascii 化）是否是文本命令帧。 */
@@ -380,6 +429,12 @@ export function parseDeviceMessage(rawInput: string): DeviceMessage {
       return {type: 'WIFI_OPENED'};
     case 'WIFIC':
       return {type: 'WIFI_CLOSED'};
+    case 'OTA':
+      // GJJY_DEV&OTA：设备进入 OTA 模式、就绪可收固件帧。
+      return {type: 'OTA_READY'};
+    case 'OT':
+      // GJJY_DEV&OT&OVER 成功 / OT&ERR 失败。
+      return tokens[1] === 'ERR' ? {type: 'OTA_ERR'} : {type: 'OTA_DONE'};
     default:
       return {type: 'UNKNOWN', raw, tokens};
   }

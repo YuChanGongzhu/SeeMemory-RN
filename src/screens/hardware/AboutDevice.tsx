@@ -1,11 +1,12 @@
 /**
- * 关于设备 —— 型号/系统版本/蓝牙地址来自真实 status；设备名仅本机生效（本地存储）；
- * WiFi 模块版本为模拟串。底部协议/隐私/帮助入口。
+ * 关于设备 —— 型号/系统版本/WiFi 模块版本/蓝牙地址来自真实 status（WF 读 WiFi 版本）；
+ * 设备名仅本机生效（本地存储）。底部协议/隐私/帮助入口。
  */
 import React, {useState} from 'react';
-import {Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {Edit2} from 'lucide-react-native';
 import {SubHeader, Card, MenuRow, InfoRow, IosAlert, ModalInput, HW} from './parts';
+import {PRIVACY_POLICY_URL} from '../../config/legal';
 import {useMr20} from '../../hooks/useMr20';
 
 export function AboutDevice({
@@ -49,13 +50,12 @@ export function AboutDevice({
         <Card style={{marginBottom: 16}}>
           <InfoRow label="设备型号" value="MR20 记忆粒" />
           <InfoRow label="系统版本" value={status.firmware || 'V1.0'} />
-          <InfoRow label="WiFi 模块版本" value="V1.2" />
+          <InfoRow label="WiFi 模块版本" value={status.wifiVersion || '—'} />
           <InfoRow label="蓝牙地址" value={status.mac || '—'} last />
         </Card>
 
         <Card>
-          <MenuRow label="用户协议" onPress={() => Alert.alert('即将打开网页', '用户协议')} />
-          <MenuRow label="隐私政策" onPress={() => Alert.alert('即将打开网页', '隐私政策')} />
+          <MenuRow label="隐私政策" onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)} />
           <MenuRow label="帮助与反馈" onPress={onHelp} last />
         </Card>
       </ScrollView>

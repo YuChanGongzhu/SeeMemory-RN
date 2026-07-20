@@ -26,7 +26,12 @@ import {
   setUnauthorizedHandler,
 } from '../apis/core/session';
 import {getDeviceList, type MemoryStudio} from '../apis/requests/device';
-import {getUserInfo, loginWithPhoneNumber, type UserInfo} from '../apis/requests/user';
+import {
+  deleteAccount as deleteAccountRequest,
+  getUserInfo,
+  loginWithPhoneNumber,
+  type UserInfo,
+} from '../apis/requests/user';
 
 function toSelectedDevice(d: MemoryStudio): SelectedDevice {
   return {id: d.id, name: d.name, subDomain: d.subDomain, deviceToken: d.deviceToken};
@@ -59,6 +64,7 @@ interface AuthContextValue {
   login: (phone: string, captcha: string) => Promise<void>;
   loginAsGuest: () => void;
   logout: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   selectDevice: (device: MemoryStudio | SelectedDevice) => Promise<void>;
   refreshDevices: () => Promise<MemoryStudio[]>;
 }
@@ -109,6 +115,13 @@ export function AuthProvider({children}: {children: ReactNode}) {
     setIsGuest(true);
     setAuthTokenState('guest-token');
   }, []);
+
+  // 注销账号：服务端软删除成功后才清本地。顺序不能反——先清本地就没有 token 可用来调接口了。
+  // 服务端抛错时保持登录态不变，由调用方提示失败。
+  const deleteAccount = useCallback(async () => {
+    await deleteAccountRequest();
+    await logout();
+  }, [logout]);
 
   // Hydrate persisted session on startup.
   useEffect(() => {
@@ -201,10 +214,11 @@ export function AuthProvider({children}: {children: ReactNode}) {
       login,
       loginAsGuest,
       logout,
+      deleteAccount,
       selectDevice,
       refreshDevices,
     }),
-    [isHydrated, authToken, isGuest, user, devices, selectedDevice, login, loginAsGuest, logout, selectDevice, refreshDevices],
+    [isHydrated, authToken, isGuest, user, devices, selectedDevice, login, loginAsGuest, logout, deleteAccount, selectDevice, refreshDevices],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

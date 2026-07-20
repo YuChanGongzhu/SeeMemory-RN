@@ -16,7 +16,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {Check, ChevronRight, Rocket} from 'lucide-react-native';
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Rocket,
+  Trash2,
+} from 'lucide-react-native';
 import {useMr20} from '../../hooks/useMr20';
 import type {Mr20File} from '../../native/mr20/Mr20Client';
 import {fileEpoch} from '../../services/mr20Ingest';
@@ -38,6 +45,12 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     inbox,
     startWifiTransfer,
     syncSelected,
+    deleteDeviceFiles,
+    stopDeleteDeviceFiles,
+    deletingDevice,
+    deleteProgress,
+    error,
+    clearError,
   } = useMr20();
 
   const [files, setFiles] = useState<Mr20File[]>([]);
@@ -45,6 +58,10 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openDir, setOpenDir] = useState<string | null>(null); // null=文件夹一级，否则=某天二级
   const [wifiAsk, setWifiAsk] = useState(false); // 「切换 WiFi 快传」确认弹窗
+  const [delAsk, setDelAsk] = useState(false); // 按勾选删除的确认弹窗
+  const [cleanAsk, setCleanAsk] = useState(false); // 「清理已传输」的确认弹窗
+  // 仅在有失败时置上：全成功不打断用户（行消失本身就是反馈）。
+  const [delResult, setDelResult] = useState<{ok: number; failed: number} | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -78,8 +95,17 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     for (const arr of map.values()) {
       arr.sort(byTimeDesc);
     }
-    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+    return Array.from(map.entries())
+      .filter(([, arr]) => arr.length > 0) // 被删空的日期文件夹直接消失，不渲染「0 个文件」
+      .sort((a, b) => b[0].localeCompare(a[0]));
   }, [files]);
+
+  // 在二级页把一整天删光时，自动退回一级。
+  useEffect(() => {
+    if (openDir && !files.some(f => f.dir === openDir)) {
+      setOpenDir(null);
+    }
+  }, [files, openDir]);
 
   const selectedFiles = useMemo(
     () => files.filter(f => selected.has(keyOf(f))),
@@ -87,6 +113,16 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   );
   const selectedBytes = selectedFiles.reduce((n, f) => n + (f.size || 0), 0);
   const allSelected = files.length > 0 && selected.size === files.length;
+
+  // 「清理已传输」的目标集 + 选中项里尚未传输的条数（决定删除弹窗用哪套警告文案）。
+  const transferredFiles = useMemo(
+    () => files.filter(f => transferred.has(keyOf(f))),
+    [files, transferred],
+  );
+  const transferredBytes = transferredFiles.reduce((n, f) => n + (f.size || 0), 0);
+  const notTransferredCount = selectedFiles.filter(
+    f => !transferred.has(keyOf(f)),
+  ).length;
 
   const openItems = useMemo(
     () => (openDir ? groups.find(([d]) => d === openDir)?.[1] ?? [] : []),
@@ -133,6 +169,35 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     syncSelected(selectedFiles).catch(() => undefined);
   }, [selectedFiles, syncSelected]);
 
+  /**
+   * 从设备删除并同步本地列表。本页 files 只在挂载时拉一次、之后不重拉，所以要按逐文件
+   * 结果自己 splice——失败的行保持勾选，重试一键即可。
+   */
+  const runDelete = useCallback(
+    async (targets: Mr20File[]) => {
+      if (!targets.length) {
+        return;
+      }
+      const results = await deleteDeviceFiles(targets);
+      const okKeys = new Set(
+        results.filter(r => r.ok).map(r => keyOf(r.file)),
+      );
+      if (okKeys.size) {
+        setFiles(prev => prev.filter(f => !okKeys.has(keyOf(f))));
+        setSelected(prev => {
+          const next = new Set(prev);
+          okKeys.forEach(k => next.delete(k));
+          return next;
+        });
+      }
+      const failed = results.length - okKeys.size;
+      if (failed > 0) {
+        setDelResult({ok: okKeys.size, failed});
+      }
+    },
+    [deleteDeviceFiles],
+  );
+
   // 手动切到 WiFi 快传：确认后让手机临时加入设备热点高速直传。
   const confirmWifi = useCallback(() => {
     setWifiAsk(false);
@@ -147,7 +212,34 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
       <SubHeader
         title={openDir ?? '设备文件'}
         onBack={openDir ? () => setOpenDir(null) : onBack}
+        right={
+          // 破坏性操作放头部右侧（iOS 多选列表惯例），不与底部主操作抢位置。
+          // selected 是跨两级的全局集合，故一二级行为一致。
+          deletingDevice ? (
+            <ActivityIndicator size="small" color={HW.red} />
+          ) : (
+            <TouchableOpacity
+              disabled={selectedFiles.length === 0}
+              onPress={() => setDelAsk(true)}
+              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              <Trash2
+                size={20}
+                color={selectedFiles.length ? HW.red : HW.textTertiary}
+              />
+            </TouchableOpacity>
+          )
+        }
       />
+
+      {/* 本页在 HardwarePage 里是提前 return 的分支，够不到主页那条 errorBar，得自己有一条 */}
+      {error ? (
+        <TouchableOpacity style={st.errorBar} onPress={clearError} activeOpacity={0.8}>
+          <AlertCircle size={16} color="#fff" />
+          <Text style={st.errorText} numberOfLines={3}>
+            {error}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       <ScrollView contentContainerStyle={st.body} showsVerticalScrollIndicator={false}>
         {connState !== 'connected' ? (
@@ -211,7 +303,27 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
                 <Text style={st.selectAll}>{allSelected ? '取消全选' : '全选'}</Text>
               </TouchableOpacity>
             </View>
-            <Text style={st.headHint}>已传输的录音仍在列表中，可重新传输以覆盖本地文件。</Text>
+            <View style={st.headHintRow}>
+              <Text style={st.headHint}>
+                已传输的录音仍在列表中，可重新传输以覆盖本地文件。
+              </Text>
+              {/* 整机维护动作，属于「全部设备录音」，故只在一级出现、也不放进按选择走的 footer。
+                  用蓝色而非红色：这是安全变体（手机副本还在），标红会训练用户忽略红色。 */}
+              <TouchableOpacity
+                disabled={transferredFiles.length === 0 || deletingDevice}
+                onPress={() => setCleanAsk(true)}
+                hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                <Text
+                  style={[
+                    st.cleanLink,
+                    (transferredFiles.length === 0 || deletingDevice) && {
+                      color: HW.textTertiary,
+                    },
+                  ]}>
+                  清理已传输（{transferredFiles.length}）
+                </Text>
+              </TouchableOpacity>
+            </View>
             <View style={st.rowGap}>
               {groups.map(([dir, items]) => {
                 const sel = dirSelCount(items);
@@ -260,9 +372,25 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
       {/* 底部：默认蓝牙一键上传，下方「切换 WiFi 快传」次要链接 */}
       {connState === 'connected' && files.length > 0 ? (
         <View style={st.footer}>
+          {/* 删除进度 + 取消。取消只在文件边界生效，故这里一直显示到 deletingDevice 翻 false。 */}
+          {deletingDevice && deleteProgress ? (
+            <View style={st.delProgressRow}>
+              <Text style={st.delProgressText} numberOfLines={1}>
+                正在删除设备录音 {deleteProgress.completed}/{deleteProgress.total}…
+              </Text>
+              <TouchableOpacity
+                onPress={stopDeleteDeviceFiles}
+                hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                <Text style={st.delCancel}>取消</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           <TouchableOpacity
-            style={[st.startBtn, selectedFiles.length === 0 && st.startBtnDisabled]}
-            disabled={selectedFiles.length === 0}
+            style={[
+              st.startBtn,
+              (selectedFiles.length === 0 || deletingDevice) && st.startBtnDisabled,
+            ]}
+            disabled={selectedFiles.length === 0 || deletingDevice}
             onPress={start}>
             <Text style={st.startBtnText}>
               蓝牙上传
@@ -271,12 +399,24 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
           </TouchableOpacity>
           <TouchableOpacity
             style={st.wifiLink}
-            disabled={selectedFiles.length === 0}
+            disabled={selectedFiles.length === 0 || deletingDevice}
             hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
             onPress={() => setWifiAsk(true)}>
-            <Rocket size={14} color={selectedFiles.length === 0 ? HW.textTertiary : HW.blue} />
+            <Rocket
+              size={14}
+              color={
+                selectedFiles.length === 0 || deletingDevice
+                  ? HW.textTertiary
+                  : HW.blue
+              }
+            />
             <Text
-              style={[st.wifiLinkText, selectedFiles.length === 0 && {color: HW.textTertiary}]}>
+              style={[
+                st.wifiLinkText,
+                (selectedFiles.length === 0 || deletingDevice) && {
+                  color: HW.textTertiary,
+                },
+              ]}>
               切换 WiFi 快传，比蓝牙快 10× →
             </Text>
           </TouchableOpacity>
@@ -293,6 +433,61 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
           {text: '取消', onPress: () => setWifiAsk(false)},
           {text: '加入', bold: true, onPress: confirmWifi},
         ]}
+      />
+
+      {/* 按勾选删除。注意 IosAlert 的按钮不会自动关闭，每个 onPress 都得自己收弹窗。 */}
+      <IosAlert
+        visible={delAsk}
+        onClose={() => setDelAsk(false)}
+        title={`确定从设备删除 ${selectedFiles.length} 条录音？`}
+        titleColor={HW.red}
+        icon={<AlertTriangle size={32} color={HW.red} />}
+        message={
+          notTransferredCount > 0
+            ? `其中 ${notTransferredCount} 条尚未传输到手机，删除后无法恢复，也无法再次传输。删除只清理设备存储，已传输到手机的录音不受影响。`
+            : `选中的录音已全部传输到手机，删除后设备可释放 ${fmtMB(selectedBytes)} 空间，手机里的录音不受影响。设备上的删除无法恢复。`
+        }
+        buttons={[
+          {text: '取消', onPress: () => setDelAsk(false)},
+          {
+            text: notTransferredCount > 0 ? '仍要删除' : '删除',
+            danger: true,
+            onPress: () => {
+              setDelAsk(false);
+              runDelete(selectedFiles).catch(() => undefined);
+            },
+          },
+        ]}
+      />
+
+      {/* 一键清理已传输：手机副本仍在，但设备侧同样不可逆，故照样用破坏性模板。 */}
+      <IosAlert
+        visible={cleanAsk}
+        onClose={() => setCleanAsk(false)}
+        title="清理设备上已传输的录音？"
+        titleColor={HW.red}
+        icon={<AlertTriangle size={32} color={HW.red} />}
+        message={`将从设备删除 ${transferredFiles.length} 条已传输的录音，释放约 ${fmtMB(transferredBytes)} 空间。手机「我的录音」里的这些录音不会被删除。设备上的删除无法恢复。`}
+        buttons={[
+          {text: '取消', onPress: () => setCleanAsk(false)},
+          {
+            text: '清理',
+            danger: true,
+            onPress: () => {
+              setCleanAsk(false);
+              runDelete(transferredFiles).catch(() => undefined);
+            },
+          },
+        ]}
+      />
+
+      {/* 部分失败才弹（全成功时行消失本身就是反馈，不打断用户）。代码库没有 toast 组件。 */}
+      <IosAlert
+        visible={!!delResult}
+        onClose={() => setDelResult(null)}
+        title="部分录音未能删除"
+        message={`成功删除 ${delResult?.ok ?? 0} 条，${delResult?.failed ?? 0} 条删除失败（设备可能正在录音或文件被占用）。失败的录音仍保持勾选，可稍后重试。`}
+        buttons={[{text: '知道了', bold: true, onPress: () => setDelResult(null)}]}
       />
 
       {/* 非阻塞传输浮标：可点开看进度/取消，其余时间不挡操作 */}
@@ -312,7 +507,12 @@ const st = StyleSheet.create({
   selectHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 8},
   selectTitle: {fontSize: 17, fontWeight: '700', color: HW.textMain},
   selectAll: {fontSize: 14, color: HW.blue, fontWeight: '600'},
-  headHint: {fontSize: 12, color: HW.textSub, lineHeight: 18, marginBottom: 14},
+  headHintRow: {flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14},
+  headHint: {flex: 1, fontSize: 12, color: HW.textSub, lineHeight: 18},
+  cleanLink: {fontSize: 13, color: HW.blue, fontWeight: '600'},
+
+  errorBar: {flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: HW.red, paddingHorizontal: 16, paddingVertical: 10},
+  errorText: {flex: 1, color: '#fff', fontSize: 13, lineHeight: 18},
 
   doneBadge: {paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: HW.divider},
   doneBadgeText: {fontSize: 11, color: HW.textSub, fontWeight: '600'},
@@ -329,6 +529,10 @@ const st = StyleSheet.create({
   fileMeta: {fontSize: 12, color: HW.textSub},
 
   footer: {position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 12, backgroundColor: 'rgba(249,249,251,0.96)', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HW.divider},
+  delProgressRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10},
+  delProgressText: {flex: 1, fontSize: 13, color: HW.textSub},
+  delCancel: {fontSize: 14, color: HW.blue, fontWeight: '600'},
+
   startBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 16, backgroundColor: HW.blue},
   startBtnDisabled: {backgroundColor: HW.textTertiary},
   startBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},

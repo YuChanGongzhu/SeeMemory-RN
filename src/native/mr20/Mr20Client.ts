@@ -13,6 +13,7 @@ import {
   MR20_UUID,
   base64ToBytes,
   bytesToAscii,
+  bytesToBase64,
   encodeCommand,
   isCommandFrame,
   parseDeviceMessage,
@@ -36,6 +37,7 @@ export interface Mr20Status {
   spaceFreeMb?: number;
   spaceTotalMb?: number;
   firmware?: string;
+  wifiVersion?: string;
   mac?: string;
   recMode?: 'call' | 'conversation';
 }
@@ -327,6 +329,9 @@ export class Mr20Client {
       case 'FIRMWARE':
         this.emit('status', {firmware: msg.version});
         break;
+      case 'WIFI_VERSION':
+        this.emit('status', {wifiVersion: msg.version});
+        break;
       case 'MAC':
         this.emit('status', {mac: msg.mac});
         break;
@@ -462,22 +467,35 @@ export class Mr20Client {
     predicate: (msg: DeviceMessage) => boolean,
     timeoutMs = DEFAULT_TIMEOUT,
   ): Promise<DeviceMessage> {
-    return this.runExclusive(async () => {
-      const {promise, cancel} = this.collect<DeviceMessage>(
-        msg => (predicate(msg) ? {done: true, value: msg} : {done: false}),
-        timeoutMs,
-      );
-      try {
-        await this.write(command);
-      } catch (e) {
-        // write 失败（如已断开）时，等待者还没被任何人 await——必须主动结算，
-        // 否则它会在超时后抛出未处理拒绝。先挂个 noop catch 吞掉取消引发的拒绝。
-        promise.catch(() => undefined);
-        cancel(e as Error);
-        throw e;
-      }
-      return promise;
-    });
+    return this.runExclusive(() =>
+      this.sendAndWaitLocked(command, predicate, timeoutMs),
+    );
+  }
+
+  /**
+   * sendAndWait 的「已持锁」版本：写命令 + 等应答，但**不自己抢 runExclusive 锁**。
+   * 供已经在一个 runExclusive 事务内的调用方复用（如 OTA 全程独占锁、中途要多次收发）；
+   * 直接调用会与并发事务串扰，仅限已持锁场景。
+   */
+  private async sendAndWaitLocked(
+    command: string,
+    predicate: (msg: DeviceMessage) => boolean,
+    timeoutMs = DEFAULT_TIMEOUT,
+  ): Promise<DeviceMessage> {
+    const {promise, cancel} = this.collect<DeviceMessage>(
+      msg => (predicate(msg) ? {done: true, value: msg} : {done: false}),
+      timeoutMs,
+    );
+    try {
+      await this.write(command);
+    } catch (e) {
+      // write 失败（如已断开）时，等待者还没被任何人 await——必须主动结算，
+      // 否则它会在超时后抛出未处理拒绝。先挂个 noop catch 吞掉取消引发的拒绝。
+      promise.catch(() => undefined);
+      cancel(e as Error);
+      throw e;
+    }
+    return promise;
   }
 
   // -------------------------------------------------------------------------
@@ -558,6 +576,21 @@ export class Mr20Client {
     return m.type === 'FIRMWARE' ? m.version : '';
   }
 
+  /** 获取 WiFi 模组固件版本（WF → WF&<版本>）。 */
+  async getWifiVersion(): Promise<string> {
+    const m = await this.sendAndWait(
+      Cmd.getWifiVersion(),
+      x => x.type === 'WIFI_VERSION',
+    );
+    return m.type === 'WIFI_VERSION' ? m.version : '';
+  }
+
+  /** 读取设备当前时间（GT → CT&<yyyymmddhhmmss>），返回原始 14 位串；解析交给 UI。 */
+  async getTime(): Promise<string> {
+    const m = await this.sendAndWait(Cmd.getTime(), x => x.type === 'TIME');
+    return m.type === 'TIME' ? m.time : '';
+  }
+
   async getMac(): Promise<string> {
     const m = await this.sendAndWait(Cmd.getMac(), x => x.type === 'MAC');
     return m.type === 'MAC' ? m.mac : '';
@@ -593,6 +626,9 @@ export class Mr20Client {
     } catch {}
     try {
       status.firmware = await this.getFirmware();
+    } catch {}
+    try {
+      status.wifiVersion = await this.getWifiVersion();
     } catch {}
     try {
       status.mac = await this.getMac();
@@ -850,6 +886,55 @@ export class Mr20Client {
   }
 
   /**
+   * 修改热点 SSID/密码（WIFI&CH）。协议 R33：**MCU 不回包**，结果只能靠轮询 WIFIS 推断。
+   *
+   * 真机实测（YLF20，见 [[mr20-wifi-change-credentials]]）：**冷发 WIFI&CH 时设备只把热点从
+   * 3→2 唤起、并不进 4（修改密码中）**——协议也印证「状态 4/5/6 时无法关 WiFi」，即改密发生在
+   * 热点已开之时。故这里**先 openWifi() 让热点到 AP 态（1/2），再发 WIFI&CH**。
+   *
+   * 轮询 WIFIS：
+   *   4/5 = 修改密码中 / 应用中 → 记为「已进入改密态」（命令被接受）
+   *   6   = 密码已改、待复位关机 → 明确成功
+   *   进过改密态后回落到 0/1/2/7（设备复位重启 WiFi）→ 视为已应用、成功
+   * 全程未进改密态 → 按「末态 X，未进入修改态」抛错，便于判定是格式仍不对还是别的问题。
+   *
+   * ⚠️ WIFI&CH 的参数拼法（见 {@link Cmd.changeWifi}）协议未写死；本实现按 get 应答
+   * `WIFI&SSID&PWD` 的结构对称拼 `WIFI&CH&ssid&pwd`。若真机仍不进 4/6，需向固件方确认格式。
+   */
+  async changeWifiCredentials(
+    ssid: string,
+    pwd: string,
+    opts: {maxWaitMs?: number} = {},
+  ): Promise<void> {
+    const {maxWaitMs = 20000} = opts;
+    // 先确保热点在 AP 态：冷发 WIFI&CH 只会唤起 WiFi、不进改密（真机实测）。
+    await this.openWifi();
+    // 命令无应答，直接写；随后进入轮询确认。
+    await this.write(Cmd.changeWifi(ssid, pwd));
+    const deadline = Date.now() + maxWaitMs;
+    let sawChanging = false;
+    let lastState = -1;
+    while (Date.now() < deadline) {
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
+      const s = await this.getWifiState().catch(() => -1);
+      lastState = s;
+      if (s === 4 || s === 5) {
+        sawChanging = true; // 进入修改密码/应用中，命令已被接受
+      }
+      if (s === 6) {
+        return; // 明确成功、待设备复位
+      }
+      // 进过改密态后回落（设备复位重启 WiFi）也算已应用。
+      if (sawChanging && (s === 0 || s === 1 || s === 2 || s === 7)) {
+        return;
+      }
+    }
+    throw new Error(
+      `修改热点信息未确认（末态 ${lastState}，${sawChanging ? '曾进入修改态' : '未进入修改态'}）`,
+    );
+  }
+
+  /**
    * 建立整批 WiFi 快传共用的 TCP 长连接（**只连一次**）。后续每个文件用 {@link wifiReceiveShared}
    * 在同一 socket 上收流，批末用 {@link wifiCloseShared} 关闭——避免逐条重连的 ~1s 空档。
    * **必须早于发 W**（设备一回 W&LEN 就往 socket 推字节，晚连丢数据卡 0）。
@@ -935,6 +1020,79 @@ export class Mr20Client {
     if (id) {
       await Mr20Native.wifiAbort(id).catch(() => undefined);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // OTA 固件升级（MCU）
+  // -------------------------------------------------------------------------
+
+  /** 直接发送原始字节帧（OTA 固件数据）。不做 GJJY ASCII 封装，仅 bytes->base64 写入写特征。 */
+  private async writeRaw(bytes: Uint8Array): Promise<void> {
+    await Mr20Native.writeNoResponse(
+      MR20_UUID.service,
+      MR20_UUID.write,
+      bytesToBase64(bytes),
+    );
+  }
+
+  /**
+   * MCU OTA 升级。协议 R42/R44/R61：
+   *   1. 发 `OTA&<LEN 6位>` → 等 `DEV&OTA` 就绪；
+   *   2. 按 244 字节/帧流式发送固件原始字节，每帧间隔 ≥8ms（iOS 建议 20ms）；
+   *   3. 发完 `OT&OVER` → 等 `DEV&OT&OVER`（成功）/ `OT&ERR`（失败）。
+   *
+   * 全程 `runExclusive` 独占 BLE 串行锁：协议明确「OTA 期间禁发其他指令，否则会 OTA 失败」。
+   * LEN 固定 6 位 → 固件必须 ≤999999 字节（≈1MB）。成功后设备自行复位（BLE 断开是预期的）。
+   * 传输中断/校验失败会使设备卡在 OTA 等待态，需断电重启——故失败文案提示重启。
+   */
+  async otaUpdateMcu(
+    bin: Uint8Array,
+    opts: {
+      onProgress?: (sent: number, total: number) => void;
+      frameSize?: number;
+      frameIntervalMs?: number;
+    } = {},
+  ): Promise<void> {
+    const {onProgress, frameSize = 244, frameIntervalMs = 20} = opts;
+    const total = bin.length;
+    if (total <= 0) {
+      throw new Error('固件为空');
+    }
+    if (total > 999999) {
+      throw new Error('固件超过 1MB（协议 OTA LEN 6 位上限），无法通过 BLE OTA 下发');
+    }
+    return this.runExclusive(async () => {
+      // 1) 发起 OTA，等设备就绪。
+      await this.sendAndWaitLocked(
+        Cmd.otaStart(total),
+        m => m.type === 'OTA_READY',
+        8000,
+      );
+      // 2) 流式发送固件帧（原始字节，非 ASCII 命令）。
+      let sent = 0;
+      onProgress?.(0, total);
+      for (let off = 0; off < total; off += frameSize) {
+        const frame = bin.subarray(off, Math.min(off + frameSize, total));
+        await this.writeRaw(frame);
+        sent += frame.length;
+        onProgress?.(sent, total);
+        // 每帧间隔；最后一帧后无需再等。
+        if (off + frameSize < total) {
+          await new Promise<void>(resolve =>
+            setTimeout(() => resolve(), frameIntervalMs),
+          );
+        }
+      }
+      // 3) 通知发送完成，等设备写 flash 后回结果（放宽超时）。
+      const done = await this.sendAndWaitLocked(
+        Cmd.otaOver(),
+        m => m.type === 'OTA_DONE' || m.type === 'OTA_ERR',
+        30000,
+      );
+      if (done.type === 'OTA_ERR') {
+        throw new Error('设备固件接收失败，请断电重启设备后重试');
+      }
+    });
   }
 
   // -------------------------------------------------------------------------

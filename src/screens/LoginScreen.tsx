@@ -1,14 +1,15 @@
 import React, {useState} from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator,
-  KeyboardAvoidingView, Platform, StyleSheet,
+  KeyboardAvoidingView, Platform, Linking, StyleSheet,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {ChevronLeft, Link as LinkIcon, Check} from 'lucide-react-native';
-import {colors, radius} from '../design/tokens';
+import {colors} from '../design/tokens';
 import {images} from '../design/assets';
 import {useAuth} from '../auth/AuthContext';
 import {sendSmsVerification} from '../apis/requests/user';
+import {PRIVACY_POLICY_URL} from '../config/legal';
 
 type Step = 'main' | 'phone' | 'code' | 'bind';
 
@@ -25,6 +26,8 @@ export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () =
   const [code, setCode] = useState('');
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 默认未勾选：同意必须是用户主动作出的动作（App Store 5.1.1(i)），不能预先替他勾上。
+  const [agreed, setAgreed] = useState(false);
 
   const getCode = async () => {
     if (phone.length < 11 || busy) return;
@@ -78,8 +81,26 @@ export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () =
           <View style={[styles.actions, {paddingBottom: insets.bottom + 40}]}>
             {/* v1.0：微信一键授权未接真实 OAuth，暂不放出（放出即触发 Sign in with Apple
                 4.8 要求且属未完成功能）。以手机号登录为主入口，游客态见右上「随便看看」。 */}
-            <TouchableOpacity style={styles.ctaBtn} onPress={() => setStep('phone')}>
-              <Text style={styles.ctaText}>手机号快捷登录</Text>
+            <TouchableOpacity
+              style={[styles.ctaBtn, !agreed && styles.ctaBtnDisabled]}
+              onPress={() => (agreed ? setStep('phone') : undefined)}
+              disabled={!agreed}>
+              <Text style={[styles.ctaText, !agreed && styles.ctaTextDisabled]}>手机号快捷登录</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.agreeRow}
+              activeOpacity={0.7}
+              onPress={() => setAgreed(v => !v)}>
+              <View style={[styles.checkbox, agreed && styles.checkboxOn]}>
+                {agreed ? <Check size={12} color="#fff" strokeWidth={3} /> : null}
+              </View>
+              <Text style={styles.agreeText}>
+                我已阅读并同意
+                <Text style={styles.agreeLink} onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)}>
+                  《隐私政策》
+                </Text>
+              </Text>
             </TouchableOpacity>
           </View>
         </>
@@ -151,6 +172,22 @@ const styles = StyleSheet.create({
   actions: {paddingHorizontal: 24},
   ctaBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary, height: 56, borderRadius: 16},
   ctaText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  ctaBtnDisabled: {backgroundColor: colors.border},
+  ctaTextDisabled: {color: colors.textSub},
+  agreeRow: {flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 20, paddingHorizontal: 4},
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: colors.textTertiary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  checkboxOn: {backgroundColor: colors.primary, borderColor: colors.primary},
+  agreeText: {flex: 1, fontSize: 12, lineHeight: 18, color: colors.textSub},
+  agreeLink: {color: colors.textMain, fontWeight: '600'},
   form: {flex: 1, paddingHorizontal: 24},
   formHead: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 32},
   formTitle: {fontSize: 20, fontWeight: '700', color: colors.textMain},

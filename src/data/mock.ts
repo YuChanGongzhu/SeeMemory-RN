@@ -95,15 +95,15 @@ export const DEMO_MEMORIES: MemoryCard[] = [
 
 export const DEMO_TOPIC_ARCHIVES: TopicArchive[] = [
   {
-    id: 't1', tag: '人物', entity: '李雷', title: '与李雷关于商业化分歧的探讨', date: '2026.06.22', count: 12, timespan: '近一个月', auraColor: '#BF5AF2',
-    insight: '在过去一个月里，你与李雷共有 12 次深度讨论。核心分歧在于"是否该尽早引入订阅制"。他主张克制，你更看重商业验证。最终双方在"小容量体验包"上达成共识。',
-    keywords: ['商业化', '订阅制', '体验包'],
+    id: 't1', tag: '人物', entity: '李雷', title: '与李雷关于产品节奏分歧的探讨', date: '2026.06.22', count: 12, timespan: '近一个月', auraColor: '#BF5AF2',
+    insight: '在过去一个月里，你与李雷共有 12 次深度讨论。核心分歧在于"是否该尽早开放公测"。他主张克制，你更看重真实反馈。最终双方在"小范围灰度"上达成共识。',
+    keywords: ['产品节奏', '公测', '灰度'],
     topicGroups: [
       {
-        id: 'tg1', timeRange: '6月1日 - 6月5日', title: '关于免费策略的初次交锋', count: 4,
+        id: 'tg1', timeRange: '6月1日 - 6月5日', title: '关于开放节奏的初次交锋', count: 4,
         drillDownCard: {
           id: 'mock_drill_t1', type: 'memory', tag: '会议', time: '今天 14:30', hasAI: true,
-          aiSummary: '两人对于产品初期的免费策略发生了激烈争论。', keyQuote: '没有壁垒的免费，引来的全都是无效羊毛党。', tags: ['商业化', '免费策略'],
+          aiSummary: '两人对于产品初期的开放节奏发生了激烈争论。', keyQuote: '没打磨好就放出去，引来的全都是一次性用户。', tags: ['产品节奏', '开放策略'],
           timelineRecords: [
             {id: 1, time: '14:30', type: 'audio', duration: '12:00', name: '与李雷在咖啡馆的争论'},
             {id: 2, time: '15:20', type: 'text', content: '我其实同意他的担忧，但早期用户基数不够，怎么跑通模型？'},
@@ -111,13 +111,13 @@ export const DEMO_TOPIC_ARCHIVES: TopicArchive[] = [
         },
       },
       {
-        id: 'tg2', timeRange: '6月18日 - 6月20日', title: '达成「体验包」共识', count: 3,
+        id: 'tg2', timeRange: '6月18日 - 6月20日', title: '达成「灰度」共识', count: 3,
         drillDownCard: {
           id: 'mock_drill_t2', type: 'memory', tag: '会议', time: '今天 10:00', hasAI: true,
-          aiSummary: '最终确认了"提供小容量体验包，大算力必须订阅"的底线。', tags: ['商业化', '共识'],
+          aiSummary: '最终确认了"先小范围灰度，再逐步放量"的底线。', tags: ['产品节奏', '共识'],
           timelineRecords: [
-            {id: 1, time: '10:00', type: 'doc', doc: {name: '商业化底线草稿.pdf'}},
-            {id: 2, time: '11:15', type: 'text', content: '李雷终于妥协了，体验包是最好的缓冲带。'},
+            {id: 1, time: '10:00', type: 'doc', doc: {name: '灰度方案草稿.pdf'}},
+            {id: 2, time: '11:15', type: 'text', content: '李雷终于妥协了，灰度是最好的缓冲带。'},
           ],
         },
       },

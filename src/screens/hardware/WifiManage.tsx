@@ -1,18 +1,27 @@
 /**
  * WiFi 管理 —— 热点开关与 SSID/密码读取走真实 BLE 指令（WIFIO/WIFIC/WIFI/WIFIS）。
- * 「修改热点名称与密码」固件应答格式未确认（WIFI&CH 不回包），暂仅更新本地显示。
+ * 「修改热点名称与密码」底层是真实 WIFI&CH，但当前固件未生效（见下方 WIFI_CH_SUPPORTED），入口先关。
  */
 import React, {useEffect, useState} from 'react';
-import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {Copy, Eye, EyeOff} from 'lucide-react-native';
 import {SubHeader, Card, Toggle, IosAlert, ModalInput, HW} from './parts';
 import {Mr20DebugLog} from '../../components/mr20/Mr20DebugLog';
 import {useMr20} from '../../hooks/useMr20';
 
+/**
+ * 改热点名/密码总开关。当前固件的 WIFI&CH **未生效**：发 `WIFI&CH&<ssid>&<pwd>` 后设备进
+ * WIFIS 状态 4（修改密码中）但从不到 6，复位后凭据依旧——这是《固件反馈报告 0703》白纸黑字
+ * 记录的已知问题（"参数格式不明/未生效，待固件方澄清"）。见 [[mr20-wifi-change-credentials]]。
+ * 底层 changeHotspot / changeWifiCredentials（Mr20Client）保留且正确，等固件方给出确切格式并修好
+ * 后，把此开关置 true 即可开回入口，无需改逻辑。
+ */
+const WIFI_CH_SUPPORTED = false;
+
 type WifiState = 'off' | 'turning_on' | 'on' | 'turning_off';
 
 export function WifiManage({onBack}: {onBack: () => void}) {
-  const {connState, openHotspot, closeHotspot, getHotspotInfo, logs} = useMr20();
+  const {connState, openHotspot, closeHotspot, getHotspotInfo, changeHotspot, logs} = useMr20();
   const [wifiState, setWifiState] = useState<WifiState>('off');
   // SSID/密码以设备 WIFI 指令读到的为准（SSID 通常是设备名 YLF20_xxxx）；这里仅占位。
   const [ssid, setSsid] = useState('');
@@ -21,6 +30,7 @@ export function WifiManage({onBack}: {onBack: () => void}) {
   const [editOpen, setEditOpen] = useState(false);
   const [draftSsid, setDraftSsid] = useState('');
   const [draftPwd, setDraftPwd] = useState('');
+  const [saving, setSaving] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const busy = wifiState === 'turning_on' || wifiState === 'turning_off';
@@ -80,11 +90,34 @@ export function WifiManage({onBack}: {onBack: () => void}) {
     }
   };
 
-  // 改名/改密：固件 WIFI&CH 不回包、格式未确认，暂仅更新本地显示。
-  const saveConfig = () => {
-    setSsid(draftSsid.trim() || ssid);
-    setPwd(draftPwd.trim() || pwd);
-    setEditOpen(false);
+  // 改名/改密：发真实 WIFI&CH，成功后回读确认；固件不回包，靠轮询 WIFIS 判定，改后设备复位。
+  const saveConfig = async () => {
+    if (saving) {
+      return;
+    }
+    const newSsid = draftSsid.trim();
+    const newPwd = draftPwd.trim();
+    if (!newSsid && !newPwd) {
+      setEditOpen(false);
+      return;
+    }
+    setSaving(true);
+    setErrMsg(null);
+    try {
+      await changeHotspot(newSsid || ssid, newPwd || pwd);
+      setEditOpen(false);
+      // 改后设备会复位，回读一次（可能因复位暂时读不到，就退回本地草稿值）。
+      const info = await getHotspotInfo().catch(() => null);
+      setSsid(info?.ssid || newSsid || ssid);
+      setPwd(info?.pwd || newPwd || pwd);
+      Alert.alert('已提交修改', '设备将复位以应用新的热点信息，请稍候重连。');
+    } catch (e) {
+      // 关掉弹窗让页面上的错误横幅可见。
+      setEditOpen(false);
+      setErrMsg(String((e as Error)?.message || e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const statusMsg = errMsg
@@ -142,15 +175,29 @@ export function WifiManage({onBack}: {onBack: () => void}) {
         ) : null}
 
         <TouchableOpacity
-          activeOpacity={0.7}
-          style={st.modifyRow}
+          activeOpacity={WIFI_CH_SUPPORTED ? 0.7 : 1}
+          style={[st.modifyRow, !WIFI_CH_SUPPORTED && st.modifyRowDisabled]}
           onPress={() => {
+            if (!WIFI_CH_SUPPORTED) {
+              Alert.alert(
+                '暂不支持修改',
+                '当前设备固件尚不支持在 App 内修改热点名称与密码，固件支持后将开放此功能。',
+              );
+              return;
+            }
             setDraftSsid(ssid);
             setDraftPwd(pwd);
             setEditOpen(true);
           }}>
-          <Text style={st.modifyText}>修改热点名称与密码</Text>
+          <Text style={[st.modifyText, !WIFI_CH_SUPPORTED && st.modifyTextDisabled]}>
+            修改热点名称与密码
+          </Text>
         </TouchableOpacity>
+        <Text style={st.modifyHint}>
+          {WIFI_CH_SUPPORTED
+            ? '修改后设备会自动复位以生效，期间需重新连接。'
+            : '当前固件暂不支持在 App 内修改，需固件支持后开放。'}
+        </Text>
 
         <View style={st.tips}>
           <Text style={st.tipsTitle}>温馨提示</Text>
@@ -166,11 +213,12 @@ export function WifiManage({onBack}: {onBack: () => void}) {
 
       <IosAlert
         visible={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => (saving ? undefined : setEditOpen(false))}
         title="修改热点信息"
+        message="修改后设备会复位以生效，期间需重新连接。"
         buttons={[
-          {text: '取消', onPress: () => setEditOpen(false)},
-          {text: '确认', bold: true, onPress: saveConfig},
+          {text: '取消', onPress: () => (saving ? undefined : setEditOpen(false))},
+          {text: saving ? '修改中…' : '确认', bold: true, onPress: saveConfig},
         ]}>
         <View style={{width: '100%', gap: 8, marginTop: 12}}>
           <ModalInput value={draftSsid} onChangeText={setDraftSsid} placeholder="新热点名称" />
@@ -196,7 +244,10 @@ const st = StyleSheet.create({
   guide: {paddingBottom: 16},
   guideText: {fontSize: 12, color: HW.textSub, lineHeight: 17},
   modifyRow: {marginTop: 16, backgroundColor: HW.card, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
+  modifyRowDisabled: {opacity: 0.55},
   modifyText: {fontSize: 16, fontWeight: '500', color: HW.textMain},
+  modifyTextDisabled: {color: HW.textTertiary},
+  modifyHint: {fontSize: 12, color: HW.textSub, marginTop: 8, paddingHorizontal: 4, lineHeight: 17},
   tips: {marginTop: 16, paddingHorizontal: 4},
   tipsTitle: {fontSize: 12, fontWeight: '600', color: HW.textSub, marginBottom: 6},
   tip: {fontSize: 12, color: HW.textSub, lineHeight: 20},

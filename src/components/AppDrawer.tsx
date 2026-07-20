@@ -19,6 +19,7 @@ import {useAppDrawer} from '../hooks/useAppDrawer';
 import {usePoints} from '../hooks/usePoints';
 import {useCreateSummary} from '../hooks/useCreateSummary';
 import {useNav, type ScreenName} from '../navigation/nav';
+import {SUBSCRIPTION_ENABLED} from '../config/features';
 
 const {width: SCREEN_W} = Dimensions.get('window');
 const DRAWER_W = Math.min(360, SCREEN_W * 0.85);
@@ -111,29 +112,31 @@ export function AppDrawer() {
               <Text style={styles.name} numberOfLines={1}>
                 {name}
               </Text>
-              {!isGuest ? (
+              {!isGuest && SUBSCRIPTION_ENABLED ? (
                 <View style={styles.tierBadge}>
                   <Text style={styles.tierBadgeText}>普通</Text>
                 </View>
               ) : null}
             </View>
             <Text style={styles.sub} numberOfLines={1}>
-              {isGuest ? '点击登录查看日历与统计' : '会员专享特权'}
+              {isGuest ? '点击登录查看日历与统计' : SUBSCRIPTION_ENABLED ? '会员专享特权' : '查看个人信息'}
             </Text>
           </View>
         </TouchableOpacity>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 8}}>
-          {/* 我的套餐 */}
+          {/* 我的套餐 / 我的额度（订阅关闭时无升级入口，标题相应改为中性措辞） */}
           <View style={styles.packageCard}>
             <View style={styles.packageHead}>
               <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
                 <Zap size={15} color={colors.textMain} fill={colors.textMain} />
-                <Text style={styles.packageTitle}>我的套餐</Text>
+                <Text style={styles.packageTitle}>{SUBSCRIPTION_ENABLED ? '我的套餐' : '我的额度'}</Text>
               </View>
-              <TouchableOpacity onPress={() => go('membership')}>
-                <Text style={styles.manage}>升级</Text>
-              </TouchableOpacity>
+              {SUBSCRIPTION_ENABLED ? (
+                <TouchableOpacity onPress={() => go('membership')}>
+                  <Text style={styles.manage}>升级</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             <View style={styles.barBlock}>
@@ -213,8 +216,6 @@ const styles = StyleSheet.create({
   profile: {flexDirection: 'row', alignItems: 'center', marginBottom: 20},
   name: {...(T.sysTitle as object), color: colors.textMain},
   sub: {fontSize: 12, color: colors.textSub, marginTop: 3},
-  tierBadge: {backgroundColor: colors.bgSecondary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6},
-  tierBadgeText: {fontSize: 10, fontWeight: '700', color: colors.textSub},
   packageCard: {
     backgroundColor: colors.nested,
     borderRadius: radius.xxl,
@@ -224,8 +225,10 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   packageHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14},
-  packageTitle: {fontSize: 15, fontWeight: '600', color: colors.textMain},
+  tierBadge: {backgroundColor: colors.bgSecondary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6},
+  tierBadgeText: {fontSize: 10, fontWeight: '700', color: colors.textSub},
   manage: {fontSize: 13, fontWeight: '600', color: colors.textSub},
+  packageTitle: {fontSize: 15, fontWeight: '600', color: colors.textMain},
   barBlock: {marginBottom: 12},
   barHead: {flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6},
   barLabel: {fontSize: 12, fontWeight: '500', color: colors.textMain},

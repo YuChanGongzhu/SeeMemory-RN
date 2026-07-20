@@ -30,6 +30,24 @@ export interface SyncOptions {
   shouldCancel?: () => boolean;
 }
 
+export interface DeleteProgress {
+  total: number; // 本批要删的文件数
+  completed: number; // 已尝试完成的数量（含失败）
+  current?: {dir: string; fname: string};
+}
+
+export interface DeleteFileResult {
+  file: Mr20File;
+  ok: boolean;
+  error?: string; // DELETE_ERR / 应答超时 / 断连
+}
+
+export interface DeleteOptions {
+  onProgress?: (p: DeleteProgress) => void;
+  // 返回 true 则停止删除。协议无法打断已发出的 D 指令，故只在**文件边界**生效。
+  shouldCancel?: () => boolean;
+}
+
 export interface Mr20DeviceFiles {
   total: number; // 设备上当前录音文件总数（所有日期文件夹）
   pending: number; // 其中尚未同步到手机的数量
@@ -193,6 +211,57 @@ export async function deleteAllLocalFiles(): Promise<void> {
   if (typeof del === 'function') {
     await Mr20Native.deleteRelativePath(MR20_FILES_ROOT).catch(() => undefined);
   }
+}
+
+/**
+ * 删除**设备上**的录音文件（协议 GJJY_BLE&D&DIR&FNAME；只有逐文件指令，没有整目录/批量删）。
+ *
+ * 与上面两个 deleteLocalFiles/deleteAllLocalFiles（删手机）刻意同名族但语义相反：本函数
+ * **只清设备存储**，绝不调用 markSynced / removeInboxItems / deleteRelativePath——
+ * 本地 MP3 与它的 inbox 条目就是用户已传输的录音，必须存活（同 forgetDevice 的原则）。
+ * 已同步集合也不动：它是「别重复下载」的账本，文件都不在设备上了自然拉不回来，留着反而让
+ * 「已传输」标记保持真实。
+ *
+ * 不要把调用包进 client.runExclusive——deleteFile → sendAndWait 内部已经过该锁，
+ * 且它不可重入，包一层会把 txChain 锁死。逐调用的串行化正是我们要的。
+ */
+export async function deleteDeviceFiles(
+  client: Mr20Client,
+  files: Mr20File[],
+  options: DeleteOptions = {},
+): Promise<DeleteFileResult[]> {
+  const {onProgress, shouldCancel} = options;
+  const results: DeleteFileResult[] = [];
+  let completed = 0;
+  onProgress?.({total: files.length, completed});
+
+  for (const file of files) {
+    if (shouldCancel?.()) {
+      break; // 取消只在文件边界生效：已发出的 D 指令无法撤回。
+    }
+    onProgress?.({
+      total: files.length,
+      completed,
+      current: {dir: file.dir, fname: file.fname},
+    });
+    try {
+      // deleteFile 对 DELETE_ERR 返回 false 而**不抛**：那是单文件问题（设备正在录它/
+      // 文件被占用），继续删后面的。
+      const ok = await client.deleteFile(file.dir, file.fname);
+      results.push(ok ? {file, ok} : {file, ok: false, error: '设备拒绝删除该文件'});
+    } catch (e) {
+      // 抛异常＝链路没了（8s 应答超时 / 断连）。继续下去只会让剩余每个文件再各等 8s
+      // 换一个必然失败，故记录后中断。调用方据 results.length < files.length 判断提前结束。
+      results.push({file, ok: false, error: String((e as Error)?.message || e)});
+      completed += 1;
+      onProgress?.({total: files.length, completed});
+      break;
+    }
+    completed += 1;
+    onProgress?.({total: files.length, completed});
+  }
+
+  return results;
 }
 
 /**

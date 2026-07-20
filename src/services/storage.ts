@@ -7,6 +7,7 @@ const KEYS = {
   API_KEY: '@ringmemory:api_key',
   SELECTED_DEVICE: '@ringmemory:selected_device',
   API_ENV: '@ringmemory:api_env',
+  PRIVACY_CONSENT: '@ringmemory:privacy_consent_v1',
 };
 
 export interface SelectedDevice {
@@ -74,6 +75,17 @@ export async function saveApiEnv(env: ApiEnv): Promise<void> {
 export async function getStoredApiEnv(): Promise<ApiEnv> {
   const val = await AsyncStorage.getItem(KEYS.API_ENV);
   return val === 'test' ? 'test' : 'prod';
+}
+
+// 隐私与 AI 处理告知的同意状态。key 带 v1 后缀：披露内容有实质变更时递增，
+// 让所有用户重新确认。**故意不放进 clearSession**——同意是设备级的，
+// 不该因登出或注销而失效，否则用户每次重新登录都要再同意一遍。
+export async function savePrivacyConsent(): Promise<void> {
+  await AsyncStorage.setItem(KEYS.PRIVACY_CONSENT, new Date().toISOString());
+}
+
+export async function getPrivacyConsent(): Promise<boolean> {
+  return (await AsyncStorage.getItem(KEYS.PRIVACY_CONSENT)) !== null;
 }
 
 export async function clearSession(): Promise<void> {

@@ -34,3 +34,13 @@ export function getUserInfo(): Promise<UserInfo> {
     path: '/user/info',
   });
 }
+
+/**
+ * 注销账号。身份取自登录态 token，无需额外参数；防误触靠 App 内两段确认。
+ */
+export function deleteAccount(): Promise<null> {
+  return baseRequest<null>({
+    method: 'POST',
+    path: '/user/deleteAccount',
+  });
+}
