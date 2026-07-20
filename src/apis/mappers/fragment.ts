@@ -87,6 +87,8 @@ export function fragmentToCard(f: MemoryFragment): MemoryCard {
 
   return {
     id: f.id,
+    // 唯一赋 fragmentId 的地方：只有真碎片才可作为修正锚点。合成卡/mock 卡一律不带。
+    fragmentId: f.id,
     type: 'memory',
     tag: f.keywords?.[0] || '记忆',
     time: formatFragmentTime(f.start_time),

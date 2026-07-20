@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {View, Text, SectionList, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
+import {View, Text, SectionList, TouchableOpacity, ActivityIndicator, StyleSheet, Alert} from 'react-native';
 import {SlidersHorizontal, RotateCw} from 'lucide-react-native';
 import {colors, space} from '../design/tokens';
 import {HomeHeader} from '../ui/Header';
@@ -12,6 +12,8 @@ import {useAuth} from '../auth/AuthContext';
 import {useWriteGate} from '../hooks/useWriteGate';
 import {useNav} from '../navigation/nav';
 import {searchMemoryFragments} from '../apis/requests/memory';
+import {submitMemoryCorrection, newCorrectionRequestId} from '../apis/requests/corrections';
+import {consumeMemoryDirty} from '../apis/core/memoryDirty';
 import {fragmentToCard, parseTime, shortTime} from '../apis/mappers/fragment';
 import {getTodayMood, getMoodHistory, moodToDailyStatus, moodToHistorical} from '../apis/requests/mood';
 import {HomeFilterSheet, type SortBy, type MediaType} from '../components/HomeFilterSheet';
@@ -152,6 +154,15 @@ export function HomeHub() {
     refresh();
   }, [refresh]);
 
+  // 写操作（新建 / 修正 / 删除）后回到首页时补一次刷新。
+  // RootView 把整个栈都挂载着、首页不会重挂，所以靠「首页重回栈顶」当焦点信号（home 恒在 index 0）。
+  const isFocused = nav.stack.length === 1;
+  useEffect(() => {
+    if (isFocused && consumeMemoryDirty()) {
+      refresh();
+    }
+  }, [isFocused, refresh]);
+
   // 滚动到底加载下一页：空态 / 无更多 / 已在加载时跳过。客户端搜索仍在已载入集合内过滤，
   // 继续翻页可扩大可搜索范围。
   const loadMore = useCallback(() => {
@@ -233,7 +244,40 @@ export function HomeHub() {
     [groups, moodHistory],
   );
 
-  const removeCard = (id: string) => setMemories(list => list.filter(c => c.id !== id));
+  /**
+   * 删除 = 提交一条 forget 修正命令（后端蒸馏成 forget 意图后异步重建）。
+   * 受理即本地移除做乐观更新——重建是异步的，等它跑完再消失反而像卡住了；
+   * 失败则把卡片放回去，不留下「以为删了其实还在」的假象。
+   */
+  const deleteCard = (card: MemoryCardModel) => {
+    const anchorId = card.fragmentId;
+    if (!anchorId) return; // 调用方已按 writable 过滤，这里只是兜底
+    Alert.alert('删除这条记忆？', '将让 AI 忘记这条记忆及其关联内容，需要一点时间处理，不可撤销。', [
+      {text: '取消', style: 'cancel'},
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          // 回滚要恢复原位次，所以整份快照，不是把卡片 append 回去。
+          let snapshot: MemoryCardModel[] = [];
+          setMemories(list => {
+            snapshot = list;
+            return list.filter(c => c.id !== card.id);
+          });
+          submitMemoryCorrection({
+            anchorType: 'fragment',
+            anchorId,
+            instruction: '忘记这条记忆',
+            requestId: newCorrectionRequestId(anchorId),
+          }).catch(e => {
+            if (!mountedRef.current) return;
+            setMemories(snapshot);
+            Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试');
+          });
+        },
+      },
+    ]);
+  };
 
   return (
     <View style={styles.root}>
@@ -301,6 +345,8 @@ export function HomeHub() {
         )}
         renderItem={({item: card}) => {
           const blurred = isGuest && card.tag !== '公告';
+          // 只有真碎片能改：空态/离线态顶上来的欢迎卡没有 fragmentId，露出编辑删除只会打到 404。
+          const writable = !!card.fragmentId;
           return (
             <View style={styles.memRow}>
               <Text style={styles.time}>{shortTime(card.time)}</Text>
@@ -310,9 +356,9 @@ export function HomeHub() {
                   blurred={blurred}
                   onPress={() => (blurred ? undefined : nav.push('memoryDetail', {card}))}
                   onShare={() => {}}
-                  onEdit={() => gate(() => nav.push('editor', {mode: 'edit', card}))}
-                  onAppend={() => gate(() => nav.push('editor', {mode: 'append', card}))}
-                  onDelete={() => gate(() => removeCard(card.id))}
+                  onEdit={writable ? () => gate(() => nav.push('editor', {mode: 'edit', card})) : undefined}
+                  onAppend={writable ? () => gate(() => nav.push('editor', {mode: 'append', card})) : undefined}
+                  onDelete={writable ? () => gate(() => deleteCard(card)) : undefined}
                 />
               </View>
             </View>

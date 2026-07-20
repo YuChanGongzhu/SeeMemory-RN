@@ -20,6 +20,9 @@ private final class WifiXfer {
   var recvResolve: RCTPromiseResolveBlock?
   var recvReject: RCTPromiseRejectBlock?
   var filePath = ""
+  /// 收流停滞看门狗：每收到一批字节重新计时，超时未再来字节即判定停滞并拒绝本文件。
+  /// 没有它时设备中途「不推也不关连」会让 conn.receive 永久挂起（JS 侧无超时 → 进度条永久卡住）。
+  var idleTimer: DispatchWorkItem?
   init() {}
 }
 
@@ -422,7 +425,26 @@ class RTNMr20Module: RCTEventEmitter {
     xfer.filePath = fileURL.path
     xfer.recvResolve = resolve
     xfer.recvReject = reject
+    armIdleWatchdog(transferId)
     receiveLoop(transferId)
+  }
+
+  /// 收流停滞看门狗：`WIFI_IDLE_TIMEOUT` 内没有新字节就判本文件失败并拆连接，
+  /// 让 JS 侧（wifiSyncFiles 的 WIFI_MAX_ATTEMPTS 循环）重连续传，而不是无限等。
+  /// 每收到一批字节重新计时；成功/失败结算时取消。
+  private static let wifiIdleTimeout: TimeInterval = 12
+
+  private func armIdleWatchdog(_ transferId: String) {
+    guard let xfer = wifiXfers[transferId] else { return }
+    xfer.idleTimer?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self = self, let x = self.wifiXfers[transferId], !x.recvSettled else { return }
+      self.failRecv(
+        transferId,
+        "传输停滞（\(Int(Self.wifiIdleTimeout))s 未收到数据，已收 \(x.written)/\(x.expected) 字节）")
+    }
+    xfer.idleTimer = work
+    wifiQueue.asyncAfter(deadline: .now() + Self.wifiIdleTimeout, execute: work)
   }
 
   private func receiveLoop(_ transferId: String) {
@@ -437,6 +459,7 @@ class RTNMr20Module: RCTEventEmitter {
         return
       }
       if let data = data, !data.isEmpty {
+        self.armIdleWatchdog(transferId) // 有新字节 → 停滞计时重新开始
         xfer.receivedTotal += data.count
         if xfer.written < xfer.expected {
           let canWrite = min(data.count, xfer.expected - xfer.written)
@@ -476,6 +499,8 @@ class RTNMr20Module: RCTEventEmitter {
     // 复用长连接：关掉本文件句柄、复位单文件计数，但**不 cancel、不移除 xfer、不清 stateUpdateHandler**，
     // 让整批后续文件在同一 socket 上继续收流（消除逐条重连的 ~1s 空档）。连接由 wifiAbort 在批末统一关闭；
     // 若设备在文件间自行关连，则由 .failed/.cancelled → failRecv 拆掉，JS 侧据此重连兜底。
+    xfer.idleTimer?.cancel()
+    xfer.idleTimer = nil
     try? xfer.handle?.close()
     let path = xfer.filePath
     let resolve = xfer.recvResolve
@@ -491,6 +516,8 @@ class RTNMr20Module: RCTEventEmitter {
   private func failRecv(_ transferId: String, _ msg: String) {
     guard let xfer = wifiXfers[transferId], !xfer.recvSettled else { return }
     xfer.recvSettled = true
+    xfer.idleTimer?.cancel()
+    xfer.idleTimer = nil
     try? xfer.handle?.close()
     xfer.conn?.stateUpdateHandler = nil
     xfer.conn?.cancel()

@@ -86,6 +86,21 @@ function isMr20DeviceName(name: string): boolean {
   return MR20_NAME_PREFIXES.some(p => upper.startsWith(p));
 }
 
+/**
+ * 蓝牙文件流被实时录音流污染：收到的字节多于设备声明的 LEN。
+ * 单独一个类型是为了让上层**不要重试**——只要设备还在录音，重试必然同样污染，
+ * 徒增等待；应直接把原因报给用户（停止录音 / 改用 WiFi 快传）。
+ */
+export class Mr20StreamPollutedError extends Error {
+  constructor(readonly received: number, readonly expected: number) {
+    super(
+      `文件流被干扰（收到 ${received} 字节 > 声明 ${expected}）：设备可能正在录音，` +
+        '实时音频流混入了蓝牙文件通道。请停止录音后重试，或改用 WiFi 快传。',
+    );
+    this.name = 'Mr20StreamPollutedError';
+  }
+}
+
 export class Mr20Client {
   private nativeSubs: EmitterSubscription[] = [];
   private collectors: Array<(msg: DeviceMessage) => void> = [];
@@ -711,6 +726,19 @@ export class Mr20Client {
   // 文件同步（BLE）
   // -------------------------------------------------------------------------
 
+  /**
+   * BLE 单文件传输的「停滞」判定窗口：距上一批字节多久没有新数据算卡住。
+   * 原来是 120s（等同整文件超时），设备中途不推字节时进度条要冻 2 分钟才报错——
+   * 「传输中 0/6 卡很久」的主因。缩到 15s，让 syncFiles 能尽快重试。
+   */
+  private static readonly BLE_IDLE_TIMEOUT_MS = 15000;
+  /**
+   * 字节已收满但设备迟迟不回 FILE_DATA_DONE 时的宽限期。数据本身已完整，
+   * 超过宽限期就按成功结算，不必陪着设备干等（这是卡住时最常见的形态：
+   * 单文件进度条满格、总进度却不前进）。
+   */
+  private static readonly BLE_DONE_GRACE_MS = 5000;
+
   async pullFile(
     dir: string,
     fname: string,
@@ -732,6 +760,8 @@ export class Mr20Client {
       return Promise.reject(new Error('已有文件正在同步'));
     }
     return new Promise<Uint8Array>((resolve, reject) => {
+      // 首帧窗口用 timeoutMs（设备可能要先打开文件），之后每批字节把窗口收紧到
+      // BLE_IDLE_TIMEOUT_MS —— 传起来之后的静默才是真卡住，不该再等两分钟。
       let timer = setTimeout(() => {
         this.fileXfer = null;
         reject(new Error('文件同步超时'));
@@ -750,10 +780,27 @@ export class Mr20Client {
         reject: wrap(reject),
         onProgress: (received, total) => {
           clearTimeout(timer);
-          timer = setTimeout(() => {
+          if (total > 0 && received > total) {
+            // 收到的字节**多于**设备声明的 LEN：文件流里混进了别的东西。已知成因是设备在
+            // 自动录音时，实时音频流与文件数据走同一个 notify 特征(001120a1)，handleFrame
+            // 无法区分、把实时流也计进了本文件（见 pullFile 上方注释）。此时既不能按成功
+            // 结算（落盘的 MP3 是坏的），也不该继续等——实时流会不停刷新进度、让停滞看门狗
+            // 永远不触发，正是「进度条满格却永久卡死」的形态。立即失败并给出可定位的原因。
             this.fileXfer = null;
-            reject(new Error('文件同步停滞'));
-          }, timeoutMs);
+            reject(new Mr20StreamPollutedError(received, total));
+          } else if (total > 0 && received === total) {
+            // 字节齐了，只差一句 FILE_DATA_DONE：短宽限后自己结算，别把用户晾在满格进度条上。
+            // 只在**恰好收满**时这么做；多收（上面那支）说明数据不可信，不能当成功。
+            timer = setTimeout(() => {
+              this.log('[ble] 字节已收全但未收到 DONE，按完成结算');
+              this.finishFileTransfer();
+            }, Mr20Client.BLE_DONE_GRACE_MS);
+          } else {
+            timer = setTimeout(() => {
+              this.fileXfer = null;
+              reject(new Error('文件同步停滞'));
+            }, Mr20Client.BLE_IDLE_TIMEOUT_MS);
+          }
           onProgress?.(received, total);
           this.emit('fileProgress', {received, total});
         },
@@ -812,6 +859,12 @@ export class Mr20Client {
   // -------------------------------------------------------------------------
   // WiFi 快传（控制走 BLE，文件字节走 WiFi TCP）
   // -------------------------------------------------------------------------
+
+  /**
+   * WiFi 收流「多久没有新字节算停滞」。原生侧同名看门狗为 12s，JS 侧取稍大值（15s）作为
+   * 兜底，避免两层同时触发时先报 JS 的通用错误、盖掉原生更具体的字节数信息。
+   */
+  private static readonly WIFI_IDLE_TIMEOUT_MS = 15000;
 
   /** 查询 WiFi 状态码（0关 1连 2未连但AP起 3待开 4配密码 5OTA 6待复位 7无连自动关）。 */
   async getWifiState(): Promise<number> {
@@ -972,11 +1025,34 @@ export class Mr20Client {
     const {relativePath, onProgress} = opts;
     let total = 0;
 
+    // JS 侧停滞兜底：原生已有 12s 看门狗，但旧二进制（未重编译）没有，且看门狗只覆盖
+    // 「已开始收流」之后。这里再压一层：收到字节就续期，超时主动 abort 打断挂起的原生 promise，
+    // 让上层 wifiSyncFiles 走重连续传，而不是永远停在同一格进度。
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let stalled = false;
+    const armIdle = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => {
+        stalled = true;
+        this.log('[wifi] 收流停滞，主动断开重试');
+        this.wifiCloseShared().catch(() => undefined);
+      }, Mr20Client.WIFI_IDLE_TIMEOUT_MS);
+    };
+    const clearIdle = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
     // 订阅原生进度事件（仅本次长连接的 transferId；同一时刻只有一个文件在收）。
     const sub = mr20Emitter.addListener('onWifiProgress', (d: any) => {
       if (String(d?.transferId) !== transferId) {
         return;
       }
+      armIdle(); // 有新字节 → 停滞计时重新开始
       const received = Number(d?.received) || 0;
       const t = Number(d?.total) || total;
       onProgress?.(received, t);
@@ -997,10 +1073,15 @@ export class Mr20Client {
       this.log(`[wifi] W&LEN=${total}，开始收流`);
 
       // 在长连接上收流落盘（含剥离 5 字节尾标），返回绝对路径。
+      armIdle(); // 发完 W 就开始计时：设备一个字节都不推的情况也要能超时
       const path = await Mr20Native.wifiReceiveFile(relativePath, total, transferId);
       this.log('[wifi] 收流完成');
       return {path, total};
+    } catch (e) {
+      // abort 打断原生 promise 时报的是通用「已中断」，换成停滞原因便于定位。
+      throw stalled ? new Error('传输停滞，已断开重连') : e;
     } finally {
+      clearIdle();
       sub.remove();
     }
   }

@@ -24,6 +24,14 @@ export interface TimelineRecord {
 
 export interface MemoryCard {
   id: string;
+  /**
+   * 真实后端碎片 id —— **只有** fragmentToCard 产出的卡片才有。
+   *
+   * `id` 不可信：欢迎卡（'m4'）、演示数据、事件钻取合成卡（`event_*`）、mock 钻取卡
+   * 都会填 id，把它们当锚点发给 /app/memory/corrections 必然 404。写操作一律判本字段，
+   * 不要去猜 id 前缀——那是黑名单，加一种合成卡就漏一次。
+   */
+  fragmentId?: string;
   type: 'memory';
   tag: string;
   tagColor?: string;

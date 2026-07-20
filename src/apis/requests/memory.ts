@@ -109,6 +109,42 @@ export function searchMemoryFragments(
   });
 }
 
+// —— 手记入库 ——
+
+export interface SaveMemoryResponse {
+  external_session_id: string;
+  internal_session_id: string;
+  segment_index: number;
+  tokens: number;
+  async_exec: boolean;
+}
+
+/** 本地时间 → 后端 occurred_at 要的 `YYYY-MM-DDTHH:MM:SS`（不带时区，与后端约定一致）。 */
+function formatOccurredAt(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}` +
+    `T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
+  );
+}
+
+// POST /app/memory/save — manager-api（auth_token，user_id 由后端注入不传）
+// App 手记：一条 role=user 的消息入记忆，source=chat_app。async_exec 让落库不阻塞返回。
+// 设备录音走的是另一条链路（batch → import_device_audio），不用这个。
+export function saveMemory(content: string): Promise<SaveMemoryResponse> {
+  return baseRequest<SaveMemoryResponse>({
+    method: 'POST',
+    path: '/app/memory/save',
+    body: {
+      messages: [{role: 'user', content}],
+      source: 'chat_app',
+      occurred_at: formatOccurredAt(new Date()),
+      async_exec: true,
+    },
+    timeout: 60000,
+  });
+}
+
 // —— 总结维度选择器 ——
 
 export interface PersonOption {

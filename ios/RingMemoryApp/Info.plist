@@ -58,8 +58,6 @@
 	<string>SiMemory needs Bluetooth access to connect to your smart ring device.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>SiMemory needs Bluetooth access to connect to your smart ring device.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于在聊天中选择图片并上传发送。</string>
 	<key>NSMicrophoneUsageDescription</key>

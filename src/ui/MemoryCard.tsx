@@ -13,7 +13,9 @@ import {Play, Link as LinkIcon, RefreshCw, Mic, Share2, PenLine, Plus, Trash2, I
 import {colors, radius, shadow, type as T} from '../design/tokens';
 import type {MemoryCard as MemoryCardModel} from '../types/memory';
 
-const ACTIONS_W = 240;
+/** 单个左滑动作按钮宽度；动作条总宽 = 实际渲染的按钮数 × 本值。 */
+const ACTION_W = 60;
+const ACTIONS_MAX_W = ACTION_W * 4;
 
 function ActionBtn({
   children,
@@ -86,19 +88,38 @@ export function MemoryCard({
   const tx = useRef(new Animated.Value(0)).current;
   const openRef = useRef(false);
 
+  // 只渲染真正给了回调的动作。合成卡 / 欢迎卡不是真实碎片，调用方不传编辑/追加/删除，
+  // 这里就不该露出按钮——否则点了必然打到后端 404。
+  const actions = [
+    onShare ? {key: 'share', node: <Share2 size={20} color={colors.textMain} />, onPress: onShare} : null,
+    onEdit ? {key: 'edit', node: <PenLine size={20} color={colors.textMain} />, onPress: onEdit} : null,
+    onAppend ? {key: 'append', node: <Plus size={20} color={colors.textMain} />, onPress: onAppend} : null,
+    onDelete ? {key: 'delete', node: <Trash2 size={20} color={colors.danger} />, onPress: onDelete, danger: true} : null,
+  ].filter(Boolean) as {key: string; node: React.ReactNode; onPress: () => void; danger?: boolean}[];
+
+  // PanResponder 只创建一次，拿不到后续 render 的宽度，故经 ref 读当前值。
+  const actionsW = actions.length * ACTION_W;
+  const actionsWRef = useRef(actionsW);
+  actionsWRef.current = actionsW;
+
   const snap = (open: boolean) => {
     openRef.current = open;
-    Animated.spring(tx, {toValue: open ? -ACTIONS_W : 0, useNativeDriver: true, bounciness: 4}).start();
+    Animated.spring(tx, {
+      toValue: open ? -actionsWRef.current : 0,
+      useNativeDriver: true,
+      bounciness: 4,
+    }).start();
   };
 
   const pan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
       onPanResponderMove: (_, g) => {
-        const base = openRef.current ? -ACTIONS_W : 0;
+        const max = actionsWRef.current;
+        const base = openRef.current ? -max : 0;
         let next = base + g.dx;
         if (next > 0) next = 0;
-        if (next < -ACTIONS_W) next = -ACTIONS_W;
+        if (next < -max) next = -max;
         tx.setValue(next);
       },
       onPanResponderRelease: (_, g) => {
@@ -117,12 +138,13 @@ export function MemoryCard({
   return (
     <View style={styles.wrap}>
       {/* swipe action row (revealed underneath) */}
-      {!blurred ? (
-        <View style={styles.actions} pointerEvents="box-none">
-          <ActionBtn onPress={onShare}><Share2 size={20} color={colors.textMain} /></ActionBtn>
-          <ActionBtn onPress={onEdit}><PenLine size={20} color={colors.textMain} /></ActionBtn>
-          <ActionBtn onPress={onAppend}><Plus size={20} color={colors.textMain} /></ActionBtn>
-          <ActionBtn danger onPress={onDelete}><Trash2 size={20} color={colors.danger} /></ActionBtn>
+      {!blurred && actions.length ? (
+        <View style={[styles.actions, {width: actionsW}]} pointerEvents="box-none">
+          {actions.map(a => (
+            <ActionBtn key={a.key} danger={a.danger} onPress={a.onPress}>
+              {a.node}
+            </ActionBtn>
+          ))}
         </View>
       ) : null}
 
@@ -210,7 +232,7 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     bottom: 0,
-    width: ACTIONS_W,
+    width: ACTIONS_MAX_W, // 实际宽度由渲染处按动作数覆盖
     flexDirection: 'row',
     alignItems: 'stretch',
     paddingVertical: 12,

@@ -674,6 +674,9 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       if (ok.length === 0 && results.length > 0 && !wifiCancelRef.current) {
         setError('热点已关闭或未连接，请重新点开始快传（连热点后请尽快回到 App）。');
         setWifiPhase('error');
+        // 失败也要退热点：否则手机一直挂在没有外网的设备 AP 上，用户既上不了网、
+        // 也没法重试上传（COS 走公网）。之前只在成功路径退，是「传完还连着设备 WiFi」的一个来源。
+        disconnectWifi(client).catch(() => undefined);
         return;
       }
       setWifiSummary({
@@ -739,6 +742,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       } catch (e) {
         setError(String((e as Error)?.message || e));
         setWifiPhase('error');
+        // 连接/传输抛错同样退热点，别把手机留在设备 AP 上。
+        disconnectWifi(client).catch(() => undefined);
       }
     },
     [runWifiTransferLoop],
@@ -799,6 +804,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     } catch (e) {
       setError(String((e as Error)?.message || e));
       setWifiPhase('error');
+      disconnectWifi(client).catch(() => undefined);
     }
   }, [runWifiTransferLoop]);
 

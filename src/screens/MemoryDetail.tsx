@@ -1,8 +1,8 @@
 import React, {useMemo, useState} from 'react';
-import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal} from 'react-native';
+import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Alert} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {
-  ChevronLeft, Share2, MoreHorizontal, Sparkles, ChevronDown, PenLine, Plus,
+  ChevronLeft, Share2, MoreHorizontal, Sparkles, ChevronDown, PenLine, Plus, Trash2,
   MessageCircle, Aperture, Image as ImageIcon, Link as LinkIcon, X, QrCode, Download,
 } from 'lucide-react-native';
 import {colors, radius, shadow} from '../design/tokens';
@@ -12,6 +12,7 @@ import {BottomSheet} from '../ui/BottomSheet';
 import {useWriteGate} from '../hooks/useWriteGate';
 import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {useNav} from '../navigation/nav';
+import {submitMemoryCorrection, newCorrectionRequestId} from '../apis/requests/corrections';
 import type {MemoryCard, TimelineRecord} from '../types/memory';
 
 function parseT(t?: string): number {
@@ -38,6 +39,32 @@ export function MemoryDetail() {
   const [showShare, setShowShare] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [showPoster, setShowPoster] = useState(false);
+
+  // 只有真碎片能改：事件/汇总钻取的合成卡没有 fragmentId，发去修正必然 404。
+  const writable = !!card?.fragmentId;
+
+  /** 删除 = 提交一条 forget 修正命令，与首页左滑删除同一条链路。 */
+  const deleteMemory = () => {
+    const anchorId = card?.fragmentId;
+    if (!anchorId) return;
+    Alert.alert('删除这条记忆？', '将让 AI 忘记这条记忆及其关联内容，需要一点时间处理，不可撤销。', [
+      {text: '取消', style: 'cancel'},
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          submitMemoryCorrection({
+            anchorType: 'fragment',
+            anchorId,
+            instruction: '忘记这条记忆',
+            requestId: newCorrectionRequestId(anchorId),
+          })
+            .then(() => nav.pop())
+            .catch(e => Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试'));
+        },
+      },
+    ]);
+  };
   const [toast, setToast] = useState<string | null>(null);
 
   const hasAppended = !!card?.timelineRecords?.some(n => n.isAppended);
@@ -120,14 +147,25 @@ export function MemoryDetail() {
           <>
             <Pressable_overlay onPress={() => setShowMore(false)} />
             <View style={styles.moreMenu}>
-              <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); gate(() => nav.push('editor', {mode: 'edit', card})); }}>
-                <PenLine size={16} strokeWidth={2.3} color={colors.textMain} />
-                <Text style={styles.moreText}>编辑记忆</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); gate(() => nav.push('editor', {mode: 'append', card})); }}>
-                <Plus size={16} strokeWidth={2.3} color={colors.textMain} />
-                <Text style={styles.moreText}>追加细节</Text>
-              </TouchableOpacity>
+              {writable ? (
+                <>
+                  <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); gate(() => nav.push('editor', {mode: 'edit', card})); }}>
+                    <PenLine size={16} strokeWidth={2.3} color={colors.textMain} />
+                    <Text style={styles.moreText}>编辑记忆</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); gate(() => nav.push('editor', {mode: 'append', card})); }}>
+                    <Plus size={16} strokeWidth={2.3} color={colors.textMain} />
+                    <Text style={styles.moreText}>追加细节</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); gate(deleteMemory); }}>
+                    <Trash2 size={16} strokeWidth={2.3} color={colors.danger} />
+                    <Text style={[styles.moreText, {color: colors.danger}]}>删除记忆</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                // 事件钻取/汇总钻取合成的卡不是单条真实碎片，没有可修正的锚点。
+                <Text style={[styles.moreText, styles.moreEmpty]}>这条记忆暂不支持编辑</Text>
+              )}
             </View>
           </>
         ) : null}
@@ -334,6 +372,7 @@ const styles = StyleSheet.create({
   moreMenu: {position: 'absolute', top: 88, right: 20, backgroundColor: 'rgba(255,255,255,0.98)', borderRadius: 16, padding: 8, width: 150, ...shadow.card, zIndex: 110},
   moreItem: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10},
   moreText: {fontSize: 15, fontWeight: '600', color: colors.textMain},
+  moreEmpty: {fontWeight: '400', color: colors.textSub, paddingVertical: 12, paddingHorizontal: 12},
   body: {paddingHorizontal: 24, paddingBottom: 40},
   aiBlock: {borderRadius: radius.bigCard, padding: 24, marginBottom: 32, overflow: 'hidden', backgroundColor: colors.darkCard},
   aiHead: {flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16},

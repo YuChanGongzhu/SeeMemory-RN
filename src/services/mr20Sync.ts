@@ -2,7 +2,7 @@
  * MR20 录音同步编排：列目录/文件 -> 与已同步集合做差集 -> 串行 BLE 拉取 ->
  * 落盘 MP3 -> 自动入库（mr20Ingest）。BLE 单连接，串行 concurrency=1。
  */
-import {Mr20Client, Mr20File} from '../native/mr20/Mr20Client';
+import {Mr20Client, Mr20File, Mr20StreamPollutedError} from '../native/mr20/Mr20Client';
 import {Mr20Native} from '../native/mr20/Mr20Native';
 import {bytesToBase64} from '../native/mr20/protocol';
 import {getSyncedSet, markSynced} from './mr20Storage';
@@ -121,6 +121,11 @@ export async function listAllDeviceFiles(
   }
   return all;
 }
+
+/** 单个文件 BLE 拉取的最大尝试次数（与 WiFi 侧 WIFI_MAX_ATTEMPTS 同构）。 */
+const BLE_MAX_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 function ensureMp3Name(fname: string): string {
   return /\.mp3$/i.test(fname) ? fname : `${fname}.mp3`;
@@ -294,18 +299,47 @@ export async function syncFiles(
       break; // 用户中断：已下好的保留在收件箱，未传的留待下次同步补齐。
     }
     try {
-      const bytes = await client.pullFile(file.dir, file.fname, (received, size) => {
-        onProgress?.({
-          total: files.length,
-          completed,
-          current: {
-            dir: file.dir,
-            fname: file.fname,
-            received,
-            size: size > 0 ? size : file.size,
-          },
-        });
-      });
+      // 单文件重试：停滞/瞬时失败后先 abortTransfer 复位设备的传输状态，再重发一次 F。
+      // 没有重试时一次卡顿就把该文件判死，用户只能整批重来。
+      let bytes: Uint8Array | null = null;
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= BLE_MAX_ATTEMPTS; attempt++) {
+        if (shouldCancel?.()) {
+          break;
+        }
+        try {
+          bytes = await client.pullFile(file.dir, file.fname, (received, size) => {
+            onProgress?.({
+              total: files.length,
+              completed,
+              current: {
+                dir: file.dir,
+                fname: file.fname,
+                received,
+                size: size > 0 ? size : file.size,
+              },
+            });
+          });
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          bytes = null;
+          if (e instanceof Mr20StreamPollutedError) {
+            // 设备还在录音，重试必然被同一条实时流污染 —— 直接把原因报上去。
+            await client.abortTransfer().catch(() => undefined);
+            break;
+          }
+          if (attempt < BLE_MAX_ATTEMPTS) {
+            // 让设备退出上一次未结算的传输，否则重发 F 会被忽略。
+            await client.abortTransfer().catch(() => undefined);
+            await sleep(400 * attempt);
+          }
+        }
+      }
+      if (!bytes) {
+        throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || '传输失败'));
+      }
       const localPath = await writeMp3ToDisk(file.dir, file.fname, bytes);
       await markSynced(file.dir, file.fname);
 
