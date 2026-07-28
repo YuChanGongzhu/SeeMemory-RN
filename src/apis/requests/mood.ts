@@ -58,6 +58,16 @@ export function getMoodHistory(page = 1, pageSize = 14): Promise<MoodHistoryResp
   });
 }
 
+// GET /app/memory/mood/range — [start, end] 闭区间情绪卡（升序，YYYY-MM-DD）。
+// 心情日历一次拉整月；只回已生成的天，无卡的日子前端渲染空格。
+export function getMoodRange(start: string, end: string): Promise<DailyMoodResponse[]> {
+  return baseRequest<DailyMoodResponse[]>({
+    method: 'GET',
+    path: '/app/memory/mood/range',
+    query: {start, end},
+  });
+}
+
 // —— 过渡映射：后端新模型（7 类标准情绪 + 能量轴）→ 现有 UI 的 4 轴 Emotion ——
 // UI（MoodCard/StatusDetail/HistoricalCard）目前按 专注/焦虑/兴奋/疲惫 渲染；
 // 全量改造成 7 类频谱需要新表情资产，先用语义最近的映射把真实数据接上：

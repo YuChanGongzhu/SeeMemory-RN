@@ -11,27 +11,52 @@ import {
   View,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {Zap, Cloud, Sparkles, Smartphone, Archive, CheckCircle2, ChevronRight} from 'lucide-react-native';
+import {Zap, Cloud, Sparkles, Smartphone, Archive, CheckCircle2, ChevronRight, ShieldCheck} from 'lucide-react-native';
 import {colors, radius, type as T} from '../design/tokens';
 import {Avatar, ProgressBar} from '../ui/kit';
 import {useAuth} from '../auth/AuthContext';
 import {useAppDrawer} from '../hooks/useAppDrawer';
 import {usePoints} from '../hooks/usePoints';
+import {useActivityStats, ACTIVITY_WINDOW_DAYS} from '../hooks/useActivityStats';
 import {useCreateSummary} from '../hooks/useCreateSummary';
 import {useNav, type ScreenName} from '../navigation/nav';
 import {SUBSCRIPTION_ENABLED} from '../config/features';
+import {getApiEnv} from '../apis/core/env';
 
 const {width: SCREEN_W} = Dimensions.get('window');
 const DRAWER_W = Math.min(360, SCREEN_W * 0.85);
 
-/** Contribution heatmap (15 cols × 7 rows), prototype drawer. */
-function Heatmap({active}: {active: boolean}) {
-  const cells = Array.from({length: 15 * 7});
+const HEAT_WEEKS = ACTIVITY_WINDOW_DAYS / 7; // 15 列
+const HEAT_CELL = 12;
+const HEAT_GAP = 4;
+
+/** 本地日期 → YYYY-MM-DD（与后端 daily[].day 对齐，不能用 toISOString 会掉时区）。 */
+function dayKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 贡献热力图（15 列 × 7 行，每列一周）。窗口末尾对齐今天所在周，
+ * 深浅用绝对阈值 0/≤1/≤3/>3（与记忆脉络页热力图同一口径，跨用户语义固定）。
+ */
+function Heatmap({daily}: {daily: {day: string; count: number}[]}) {
   const palette = [colors.bgSecondary, colors.textTertiary, colors.textSub, colors.textMain];
+  const counts = new Map(daily.map(d => [d.day, d.count]));
+
+  // 最后一列是本周：从今天所在周的周一往回推 HEAT_WEEKS-1 周作为起点。
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7) - (HEAT_WEEKS - 1) * 7);
+
+  // flexWrap 是按行铺的，而每列要是一周 → 第 i 格 = 第 (i % HEAT_WEEKS) 周的第 (i / HEAT_WEEKS) 天。
   return (
     <View style={styles.heatmap}>
-      {cells.map((_, i) => {
-        const level = active ? (i * 7) % 11 === 0 ? 3 : i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0 : 0;
+      {Array.from({length: ACTIVITY_WINDOW_DAYS}, (_, i) => {
+        const week = i % HEAT_WEEKS;
+        const weekday = Math.floor(i / HEAT_WEEKS);
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + week * 7 + weekday);
+        const c = counts.get(dayKey(d)) ?? 0;
+        const level = c === 0 ? 0 : c <= 1 ? 1 : c <= 3 ? 2 : 3;
         return <View key={i} style={[styles.heatCell, {backgroundColor: palette[level]}]} />;
       })}
     </View>
@@ -62,6 +87,7 @@ export function AppDrawer() {
   const {drawerOpen, closeDrawer} = useAppDrawer();
   const {user, isGuest, logout} = useAuth();
   const account = usePoints();
+  const activity = useActivityStats(drawerOpen);
   const nav = useNav();
   const {openCreateSummary} = useCreateSummary();
 
@@ -85,6 +111,7 @@ export function AppDrawer() {
     nav.push(name);
   };
 
+  const isTest = getApiEnv() === 'test';
   const name = isGuest ? '点击登录' : user?.nickname || user?.username || '我的记忆';
   const balance = account?.balancePoints ?? 0;
   const consumed = account?.totalConsumedPoints ?? 0;
@@ -101,6 +128,13 @@ export function AppDrawer() {
           styles.panel,
           {width: DRAWER_W, paddingTop: insets.top + 28, paddingBottom: insets.bottom + 16, transform: [{translateX: slide}]},
         ]}>
+        {/* 测试环境角标（prod 不显示） */}
+        {isTest ? (
+          <View style={[styles.envBadge, {top: insets.top + 12}]} pointerEvents="none">
+            <Text style={styles.envBadgeText}>test</Text>
+          </View>
+        ) : null}
+
         {/* Profile header */}
         <TouchableOpacity
           style={styles.profile}
@@ -174,9 +208,9 @@ export function AppDrawer() {
 
           <TouchableOpacity activeOpacity={0.8} style={styles.statsRow} onPress={() => go('timeline')}>
             {[
-              {n: '16', l: '全部记忆'},
-              {n: '2', l: '累计天数'},
-              {n: '2', l: '连续天数'},
+              {n: String(activity?.total ?? 0), l: '全部记忆'},
+              {n: String(activity?.active_days ?? 0), l: '累计天数'},
+              {n: String(activity?.streak ?? 0), l: '连续天数'},
             ].map(s => (
               <View key={s.l} style={styles.statCell}>
                 <Text style={styles.statNum}>{s.n}</Text>
@@ -185,13 +219,15 @@ export function AppDrawer() {
             ))}
           </TouchableOpacity>
 
-          <Heatmap active={!isGuest} />
+          {/* 无数据时不画格子——假花纹比留白更容易被当成真实记录 */}
+          {activity && activity.total > 0 ? <Heatmap daily={activity.daily} /> : null}
 
           {/* Menu */}
           <View style={{marginTop: 8}}>
             <MenuRow icon={<Smartphone size={20} color={colors.textMain} />} label="记忆粒" onPress={() => go('hardware')} />
             <MenuRow icon={<Archive size={20} color={colors.textMain} />} label="沉淀" onPress={() => go('archive')} />
             <MenuRow icon={<CheckCircle2 size={20} color={colors.textMain} />} label="待办提醒" onPress={() => go('todo')} />
+            <MenuRow icon={<ShieldCheck size={20} color={colors.textMain} />} label="隐私与 AI" onPress={() => go('privacyAi')} />
           </View>
         </ScrollView>
 
@@ -213,6 +249,16 @@ export function AppDrawer() {
 const styles = StyleSheet.create({
   backdrop: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)'},
   panel: {position: 'absolute', left: 0, top: 0, bottom: 0, paddingHorizontal: 20, backgroundColor: colors.bg},
+  envBadge: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 10,
+    backgroundColor: colors.danger,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  envBadgeText: {fontSize: 10, fontWeight: '800', color: '#fff', letterSpacing: 0.5},
   profile: {flexDirection: 'row', alignItems: 'center', marginBottom: 20},
   name: {...(T.sysTitle as object), color: colors.textMain},
   sub: {fontSize: 12, color: colors.textSub, marginTop: 3},
@@ -249,8 +295,17 @@ const styles = StyleSheet.create({
   statCell: {flex: 1, alignItems: 'center', borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.border},
   statNum: {...(T.statNum as object), color: colors.textMain},
   statLabel: {...(T.statLabel as object), color: colors.textSub, marginTop: 2},
-  heatmap: {flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 16, width: 15 * (12 + 4)},
-  heatCell: {width: 12, height: 12, borderRadius: 2},
+  // 固定宽度锁住「每行 15 格」（交给 flexWrap 自适应会变成 14/16 列，破坏一列一周的排布），
+  // 宽度算 15 格 + 14 个间隙（原来按 15 个间隙算，右边多出一格宽），再 alignSelf 居中。
+  heatmap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: HEAT_GAP,
+    marginBottom: 16,
+    alignSelf: 'center',
+    width: HEAT_WEEKS * HEAT_CELL + (HEAT_WEEKS - 1) * HEAT_GAP,
+  },
+  heatCell: {width: HEAT_CELL, height: HEAT_CELL, borderRadius: 2},
   menuRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 4, gap: 12},
   menuIcon: {width: 28, alignItems: 'center'},
   menuLabel: {flex: 1, ...(T.menuLabel as object), color: colors.textMain},

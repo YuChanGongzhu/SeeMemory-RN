@@ -332,6 +332,7 @@ export function HomeHub() {
             {searching || isEmpty ? null : section.date === '今天' ? (
               <MoodCard
                 data={isGuest ? DAILY_STATUS : todayMood ?? DAILY_STATUS}
+                history={isGuest ? undefined : moodHistory}
                 isGuest={isGuest}
                 onPress={() =>
                   isGuest ? undefined : nav.push('dailyStatus', {data: todayMood ?? DAILY_STATUS})

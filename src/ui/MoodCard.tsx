@@ -6,37 +6,47 @@ import {emoji} from '../design/assets';
 import {GradientBg} from './Gradient';
 import type {DailyStatus, HistoricalMemory} from '../types/memory';
 
-// 一周情绪轨迹：过去几天是固定 mock 情绪（各带日期，可点开当日沉淀），「今日」格
-// 不写死，渲染时跟随真实主导情绪变化；周六/日为未来占位。仿原型 DailyStatusCard weekDays。
-const WEEK: {day: string; key?: keyof typeof emoji; type: 'past' | 'today' | 'future'; date?: string}[] = [
-  {day: '一', key: 'focus', type: 'past', date: '2026.06.17'},
-  {day: '二', key: 'fatigue', type: 'past', date: '2026.06.18'},
-  {day: '三', key: 'excitement', type: 'past', date: '2026.06.19'},
-  {day: '四', key: 'anxiety', type: 'past', date: '2026.06.20'},
-  {day: '今日', type: 'today'},
-  {day: '六', type: 'future'},
-  {day: '日', type: 'future'},
-];
+const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
-/** 过去某天的情绪轨迹格 → 该日「每日沉淀」详情（情绪由当天主导表情派生），仿原型 weekDays 点击。 */
-function historicalFromDay(d: (typeof WEEK)[number], i: number): HistoricalMemory {
-  const k = d.key;
-  return {
-    id: `hist_${i}`,
-    date: d.date || '',
-    title: '情绪起伏的日常记录',
-    emotion: {
-      focus: k === 'focus' ? 60 : 20,
-      anxiety: k === 'anxiety' ? 50 : 10,
-      excitement: k === 'excitement' ? 60 : 15,
-      fatigue: k === 'fatigue' ? 55 : 20,
-    },
-    stats: {count: 8 + i, activePeriod: '10:00 - 15:00', weekday: `周${d.day}`, topics: '日常 · 工作'},
-    insight: '偶尔的波动是正常的，保持对生活的感知力。',
-  };
+type WeekCell = {
+  day: string;
+  type: 'past' | 'today' | 'future';
+  date: string; // YYYY.MM.DD
+  historical?: HistoricalMemory;
+};
+
+/** 本地日期 → 'YYYY.MM.DD'（与 moodToHistorical 的 date 格式一致，便于按天匹配）。 */
+function fmt(d: Date) {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())}`;
 }
 
-function dominant(e: DailyStatus['emotion']) {
+/**
+ * 按真实日期构造本周（周一 → 周日）七格：今天之前为 past（有历史情绪卡才可点开），
+ * 今天为 today（跟随真实主导情绪），之后为 future 占位。
+ * 之前是写死的「一二三四今日六日」，只有周五才对得上。
+ */
+function buildWeek(history: HistoricalMemory[]): WeekCell[] {
+  const now = new Date();
+  const todayIdx = (now.getDay() + 6) % 7; // 周一=0
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - todayIdx);
+  const byDate = new Map(history.map(h => [h.date, h]));
+
+  return WEEK_LABELS.map((label, i) => {
+    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+    const date = fmt(d);
+    if (i === todayIdx) {
+      return {day: '今日', type: 'today', date};
+    }
+    if (i > todayIdx) {
+      return {day: label, type: 'future', date};
+    }
+    return {day: label, type: 'past', date, historical: byDate.get(date)};
+  });
+}
+
+/** 4 轴情绪 → 主导情绪（名称/主题色/表情 key）。心情日历（TimelinePage）与本卡共用。 */
+export function dominant(e: DailyStatus['emotion']) {
   const max = Math.max(e.focus, e.anxiety, e.excitement, e.fatigue);
   if (max === e.focus) return {name: '专注', color: '#4ADE80', bg: 'rgba(74,222,128,0.15)', key: 'focus' as const};
   if (max === e.anxiety) return {name: '焦虑', color: '#F87171', bg: 'rgba(248,113,113,0.15)', key: 'anxiety' as const};
@@ -50,16 +60,20 @@ function dominant(e: DailyStatus['emotion']) {
  */
 export function MoodCard({
   data,
+  history,
   isGuest,
   onPress,
   onOpenHistorical,
 }: {
   data: DailyStatus;
+  /** 近期历史情绪卡（HomeHub 的 getMoodHistory 结果），用于填充本周过去几天。 */
+  history?: HistoricalMemory[];
   isGuest?: boolean;
   onPress?: () => void;
   onOpenHistorical?: (data: HistoricalMemory) => void;
 }) {
   const dom = dominant(data.emotion);
+  const week = React.useMemo(() => buildWeek(history || []), [history]);
 
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={onPress} style={styles.card}>
@@ -71,17 +85,18 @@ export function MoodCard({
       </View>
 
       <View style={styles.week}>
-        {WEEK.map((d, i) => {
+        {week.map((d, i) => {
           const today = d.type === 'today';
           const future = d.type === 'future';
-          // 今日格跟随真实主导情绪（dom），过去几天用固定 mock 表情。
-          const emojiKey = today ? dom.key : d.key;
+          // 今日格跟随真实主导情绪（dom），过去几天用当天历史情绪卡；无数据则留空。
+          const emojiKey = today ? dom.key : d.historical ? dominant(d.historical.emotion).key : undefined;
           const showEmoji = !isGuest && !!emojiKey;
+          const clickable = !isGuest && !!d.historical;
           return (
             <TouchableOpacity
               key={i}
-              activeOpacity={d.type === 'past' ? 0.6 : 1}
-              onPress={() => d.type === 'past' && onOpenHistorical?.(historicalFromDay(d, i))}
+              activeOpacity={clickable ? 0.6 : 1}
+              onPress={() => clickable && onOpenHistorical?.(d.historical!)}
               style={styles.weekCol}>
               <Text style={[styles.weekDay, today && styles.weekDayToday]}>{d.day}</Text>
               <View
