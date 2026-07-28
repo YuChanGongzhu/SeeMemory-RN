@@ -230,6 +230,36 @@ class RTNMr20Module: RCTEventEmitter {
     }
   }
 
+  /// 把 Documents 下的相对目录/文件整体搬到另一相对位置（自动建目标父目录）。
+  /// 源不存在视为成功（无历史数据可搬）；若目标已存在先删掉再搬，保证 rename 不失败。
+  /// 用于把旧全局 `mr20` 目录一次性迁进当前账号的 `mr20/u_<userId>`。
+  @objc(moveRelativePath:toRelativePath:resolve:reject:)
+  func moveRelativePath(_ fromRelativePath: String,
+                        toRelativePath: String,
+                        resolve: @escaping RCTPromiseResolveBlock,
+                        reject: @escaping RCTPromiseRejectBlock) {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let src = docs.appendingPathComponent(fromRelativePath)
+    let dst = docs.appendingPathComponent(toRelativePath)
+    do {
+      guard FileManager.default.fileExists(atPath: src.path) else {
+        resolve(nil) // 源不存在＝无历史数据可搬，视为成功
+        return
+      }
+      try FileManager.default.createDirectory(
+        at: dst.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      if FileManager.default.fileExists(atPath: dst.path) {
+        try FileManager.default.removeItem(at: dst)
+      }
+      try FileManager.default.moveItem(at: src, to: dst)
+      resolve(nil)
+    } catch {
+      reject("FILE_ERR", error.localizedDescription, error)
+    }
+  }
+
   /// 返回当前沙盒 Documents 绝对路径。读取端据此 + 相对路径现算绝对路径，
   /// 避免持久化的绝对路径因容器 UUID 变化（重装/恢复）而失效。
   @objc(getDocumentsDir:reject:)

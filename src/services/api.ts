@@ -1,4 +1,5 @@
 import {baseRequest} from '../apis/core/request';
+import {assertAiConsentGranted} from '../privacy/consentRuntime';
 
 interface UploadResponse {
   status: number;
@@ -148,6 +149,7 @@ export async function getPresignedUrl(
   fileExtension: string,
   scene: number,
 ): Promise<PresignedUrlApiResponse> {
+  assertAiConsentGranted();
   // 与 see-mem-studio-web 一致：走 manager-api 通用预签名接口
   //   GET https://ms.seemem.com/api/common/getPresignedUrl?fileExtension=&scene=
   // 用登录态 auth_token (Bearer) 鉴权，返回 {code,msg,data:{presignedUrl,objectUrl}} 信封。
@@ -226,6 +228,7 @@ export async function uploadFileToCos({
   scene,
   extra,
 }: UploadFileOptions): Promise<UploadFileResult> {
+  assertAiConsentGranted();
   const resolvedExtension = (fileExtension || getFileExtension(filePath)).toLowerCase();
   const presignedResult = await getPresignedUrl(resolvedExtension, scene);
   const {presignedUrl, objectUrl} = presignedResult.data;
@@ -267,6 +270,7 @@ export async function uploadAudioSegment(
 }
 
 export async function transcribeAudioFile(filePath: string): Promise<string> {
+  assertAiConsentGranted();
   const {url, headers} = buildAmphionAsrRequestInfo();
   const fileExtension = getFileExtension(filePath);
   const mimeType = fileExtension === 'wav' ? 'audio/wav' : `audio/${fileExtension}`;
@@ -341,4 +345,3 @@ export async function uploadImageFile(
     },
   });
 }
-

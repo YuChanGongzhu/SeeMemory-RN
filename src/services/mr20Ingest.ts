@@ -13,8 +13,11 @@ import {uploadAudioSegment} from './api';
 import {resolveLocalPath} from './mr20Sync';
 import {AudioFileResult} from './audioBatch';
 import {fileEpoch, itemEpoch, batchDate} from './mr20FileTime';
+import {scopedKey} from './mr20Scope';
 
-const INBOX_KEY = '@ringmemory:mr20:inbox';
+// 收件箱 key 按当前登录账号取作用域（scope=null 时回退旧全局 key）。必须在**调用点**
+// 现取，不能在模块加载时求值——作用域会随登录/退登在运行时切换。
+const inboxKey = () => scopedKey('inbox');
 
 export type Mr20IngestStatus =
   | 'synced' // 已下载到手机，等待上传/批处理
@@ -56,7 +59,7 @@ export function batchFileName(item: {fname: string}): string {
 export {fileEpoch, itemEpoch, batchDate};
 
 async function readInbox(): Promise<Mr20InboxItem[]> {
-  const raw = await AsyncStorage.getItem(INBOX_KEY);
+  const raw = await AsyncStorage.getItem(inboxKey());
   if (!raw) {
     return [];
   }
@@ -69,7 +72,7 @@ async function readInbox(): Promise<Mr20InboxItem[]> {
 }
 
 async function writeInbox(items: Mr20InboxItem[]): Promise<void> {
-  await AsyncStorage.setItem(INBOX_KEY, JSON.stringify(items));
+  await AsyncStorage.setItem(inboxKey(), JSON.stringify(items));
 }
 
 export async function getInbox(): Promise<Mr20InboxItem[]> {
@@ -80,7 +83,7 @@ export async function getInbox(): Promise<Mr20InboxItem[]> {
 
 /** 清空收件箱（配合 clearSyncedSet 做「清除本地缓存并重新同步」）。 */
 export async function clearInbox(): Promise<void> {
-  await AsyncStorage.removeItem(INBOX_KEY);
+  await AsyncStorage.removeItem(inboxKey());
 }
 
 /**
@@ -90,7 +93,7 @@ export async function clearInbox(): Promise<void> {
 export async function removeInboxItems(ids: string[]): Promise<Mr20InboxItem[]> {
   const idSet = new Set(ids);
   const next = (await readInbox()).filter(i => !idSet.has(i.id));
-  await AsyncStorage.setItem(INBOX_KEY, JSON.stringify(next));
+  await AsyncStorage.setItem(inboxKey(), JSON.stringify(next));
   return next.sort((a, b) => itemEpoch(b) - itemEpoch(a));
 }
 

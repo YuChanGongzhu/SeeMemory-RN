@@ -4,6 +4,7 @@ import {streamChat, toOpenAIMessages, type StreamHandle} from '../services/herme
 import {uploadImageFile} from '../services/api';
 import {loadChatHistory, saveChatHistory, clearChatHistory} from '../services/chatHistoryStore';
 import type {ChatMessage} from '../types/chat';
+import {useAIConsent} from '../privacy/AIConsentContext';
 
 function createMessageId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -16,6 +17,7 @@ const CHAT_SESSION_KEY = 'self';
 
 export function useHermesChat() {
   const {selectedDevice} = useAuth();
+  const {requestAiConsent} = useAIConsent();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -71,6 +73,15 @@ export function useHermesChat() {
       if (isSending) {
         return false;
       }
+      const allowed = await requestAiConsent({
+        data: attachment?.audioPath
+          ? '语音转写文本与当前对话上下文'
+          : '你输入的文本与当前对话上下文',
+        purpose: '发送给第三方 AI 服务生成对话回复',
+      });
+      if (!allowed) {
+        return false;
+      }
 
       const userMessage: ChatMessage = {
         id: createMessageId('user'),
@@ -122,13 +133,20 @@ export function useHermesChat() {
         });
       });
     },
-    [appendSystemMessage, isSending, messages],
+    [appendSystemMessage, isSending, messages, requestAiConsent],
   );
 
   const sendImageMessage = useCallback(
     async (params: {filePath: string; mimeType?: string; text?: string}): Promise<boolean> => {
       if (!selectedDevice) {
         appendSystemMessage('请先在「设置」中选择一个记忆盒子，再上传图片。');
+        return false;
+      }
+      const allowed = await requestAiConsent({
+        data: '你选择的图片及附带文字',
+        purpose: '上传图片并由第三方 AI 服务理解内容',
+      });
+      if (!allowed) {
         return false;
       }
       setIsUploadingImage(true);
@@ -150,7 +168,7 @@ export function useHermesChat() {
         setIsUploadingImage(false);
       }
     },
-    [appendSystemMessage, selectedDevice, send],
+    [appendSystemMessage, requestAiConsent, selectedDevice, send],
   );
 
   // 语音消息：气泡展示可本地回听的音频卡片，发给 agent 的是转写文本。

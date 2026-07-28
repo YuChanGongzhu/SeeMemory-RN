@@ -4,9 +4,12 @@ import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {X, Sparkles, Image as ImageIcon, Video, Mic, Paperclip, AlertCircle} from 'lucide-react-native';
+import {X, Sparkles, Image as ImageIcon, Video, Mic, Paperclip, AlertCircle, ChevronDown} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
+import {TimelineNode} from '../ui/TimelineNode';
+import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {useNav} from '../navigation/nav';
+import type {TimelineRecord} from '../types/memory';
 import {saveMemory} from '../apis/requests/memory';
 import {
   submitMemoryCorrection,
@@ -18,6 +21,7 @@ import {
   type MemoryCorrection,
 } from '../apis/requests/corrections';
 import {markMemoryDirty} from '../apis/core/memoryDirty';
+import {useAIConsent} from '../privacy/AIConsentContext';
 
 /** 手记正文块。媒体块（图/视频/录音/附件）等 presigned URL 上传接通后再加回来。 */
 type Block = {id: string; type: 'text'; value: string};
@@ -43,6 +47,7 @@ export function EditorPage() {
 
 function NewMemoryEditor() {
   const nav = useNav();
+  const {requestAiConsent} = useAIConsent();
   const insets = useSafeAreaInsets();
   const [title, setTitle] = useState('');
   const [blocks, setBlocks] = useState<Block[]>([{id: uid(), type: 'text', value: ''}]);
@@ -67,6 +72,13 @@ function NewMemoryEditor() {
 
   const save = async () => {
     if (!hasContent || saving) return;
+    const allowed = await requestAiConsent({
+      data: '你输入的标题与记忆正文',
+      purpose: '保存到云端并进行 AI 整理',
+    });
+    if (!allowed) {
+      return;
+    }
     setSaving(true);
     try {
       await saveMemory(content);
@@ -148,6 +160,7 @@ const PLACEHOLDER: Record<'edit' | 'append', string> = {
 
 function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
   const nav = useNav();
+  const {requestAiConsent} = useAIConsent();
   const insets = useSafeAreaInsets();
   const card = nav.current.params?.card;
   const headerTitle = mode === 'append' ? '追加细节' : '编辑记忆';
@@ -156,6 +169,13 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
   const [correction, setCorrection] = useState<MemoryCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const player = useAudioPlayback();
+  const anchorBrief: string = card?.aiSummary || card?.content || '';
+  const timelineRecords: TimelineRecord[] = card?.timelineRecords || [];
+  // 摘要短到不会被截、又没有时间流时，展开按钮没有任何内容可给，就别放出来。
+  const canExpand = timelineRecords.length > 0 || anchorBrief.length > 60;
 
   // 轮询状态放 ref：定时器要在卸载时清掉，且回调里不能读到陈旧的 state。
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,6 +277,13 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
       setError('这条记忆不支持修改');
       return;
     }
+    const allowed = await requestAiConsent({
+      data: '修正指令及对应的记忆内容',
+      purpose: '发送给第三方 AI 服务重写并更新记忆',
+    });
+    if (!allowed) {
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -280,6 +307,13 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
 
   const retry = async () => {
     if (!correction || busy) return;
+    const allowed = await requestAiConsent({
+      data: '此前提交的修正指令及对应记忆内容',
+      purpose: '重新执行 AI 记忆修正',
+    });
+    if (!allowed) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -315,14 +349,46 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
       </View>
 
       <ScrollView style={{flex: 1}} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-        {/* 只读回显：让用户确认在改哪一条 */}
+        {/* 只读回显。要说清「哪里错了」就得能看到原文，所以摘要之外还能展开全量时间流，
+            否则用户对着 4 行截断的摘要根本无从下笔。 */}
         <View style={styles.anchorCard}>
           <Text style={styles.anchorLabel}>正在修正</Text>
           {card?.title ? <Text style={styles.anchorTitle}>{card.title}</Text> : null}
-          {card?.aiSummary || card?.content ? (
-            <Text style={styles.anchorBrief} numberOfLines={4}>
-              {card.aiSummary || card.content}
+          {anchorBrief ? (
+            <Text style={styles.anchorBrief} numberOfLines={expanded ? undefined : 4}>
+              {anchorBrief}
             </Text>
+          ) : null}
+
+          {expanded && timelineRecords.length ? (
+            <View style={styles.anchorTimeline}>
+              {timelineRecords.map(node => (
+                <View key={node.id} style={styles.anchorNode}>
+                  <Text style={styles.anchorNodeTime}>{node.time}</Text>
+                  <View style={{flex: 1}}>
+                    <TimelineNode
+                      node={node}
+                      playing={!!node.url && player.playingId === node.url}
+                      onTogglePlay={url => player.toggle(url, url).catch(() => {})}
+                      playbackTime={player.playingId === node.url ? player.currentTime : undefined}
+                      playbackDuration={player.playingId === node.url ? player.duration : undefined}
+                    />
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {canExpand ? (
+            <TouchableOpacity style={styles.anchorToggle} onPress={() => setExpanded(v => !v)}>
+              <Text style={styles.anchorToggleText}>{expanded ? '收起' : '展开全文'}</Text>
+              <ChevronDown
+                size={14}
+                strokeWidth={2.4}
+                color={colors.textSub}
+                style={expanded ? styles.anchorToggleIconUp : undefined}
+              />
+            </TouchableOpacity>
           ) : null}
         </View>
 
@@ -424,6 +490,12 @@ const styles = StyleSheet.create({
   anchorLabel: {fontSize: 12, fontWeight: '600', color: colors.textSub, marginBottom: 8},
   anchorTitle: {fontSize: 16, fontWeight: '700', color: colors.textMain, marginBottom: 6},
   anchorBrief: {fontSize: 14, lineHeight: 21, color: colors.textSub},
+  anchorTimeline: {marginTop: 14, gap: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 14},
+  anchorNode: {flexDirection: 'row', gap: 10},
+  anchorNodeTime: {width: 40, fontSize: 12, fontWeight: '600', color: colors.textTertiary, paddingTop: 2},
+  anchorToggle: {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12, alignSelf: 'flex-start'},
+  anchorToggleText: {fontSize: 13, fontWeight: '600', color: colors.textSub},
+  anchorToggleIconUp: {transform: [{rotate: '180deg'}]},
   instruction: {fontSize: 17, lineHeight: 26, color: colors.textMain, backgroundColor: colors.bg, borderRadius: radius.xxl, padding: 16, minHeight: 140, textAlignVertical: 'top', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border},
   counter: {fontSize: 12, color: colors.textTertiary, textAlign: 'right', marginTop: 8},
   progress: {flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, backgroundColor: colors.bgSecondary, borderRadius: radius.xxl, padding: 14},

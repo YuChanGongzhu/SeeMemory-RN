@@ -35,6 +35,10 @@ export interface Spec extends TurboModule {
   // 删除 Documents 下某相对路径（文件或目录），不存在视为成功
   deleteRelativePath(relativePath: string): Promise<void>;
 
+  // 把 Documents 下的相对目录/文件整体搬到另一相对位置（自动建目标父目录）。
+  // 源不存在视为成功（无历史数据可搬）；用于把旧 `mr20` 目录迁进 `mr20/u_<userId>`。
+  moveRelativePath(fromRelativePath: string, toRelativePath: string): Promise<void>;
+
   // 返回当前沙盒 Documents 绝对路径。读取端据此 + 相对路径现算，避免持久化
   // 的绝对路径因容器 UUID 变化（重装/恢复）而失效。
   getDocumentsDir(): Promise<string>;

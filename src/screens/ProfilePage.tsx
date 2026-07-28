@@ -140,6 +140,12 @@ export function ProfilePage() {
         {/* 隐私政策入口：原先只在硬件「关于设备」里有，需配对 MR20 才可达。
             App Store 5.1.1(i) 要求政策在 App 内可访问，故在此提供通用入口。 */}
         <View style={styles.card}>
+          <TouchableOpacity
+            style={[styles.row, styles.rowDivider]}
+            onPress={() => nav.push('privacyAi')}>
+            <Text style={styles.rowLabel}>隐私与 AI</Text>
+            <ChevronRight size={16} color={colors.textSub} />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.row} onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)}>
             <Text style={styles.rowLabel}>隐私政策</Text>
             <ChevronRight size={16} color={colors.textSub} />

@@ -71,6 +71,9 @@ import {
   WifiStepState,
   WifiTransferProgress,
 } from '../services/mr20WifiSync';
+import {setMr20Scope} from '../services/mr20Scope';
+import {useAuth} from '../auth/AuthContext';
+import {useAIConsent} from '../privacy/AIConsentContext';
 
 /** WiFi 快传整体阶段。 */
 export type WifiPhase =
@@ -161,6 +164,8 @@ interface Mr20ContextType {
   startWifiTransfer: (files: Mr20File[]) => Promise<void>;
   // WiFi 快传「全部待同步」（首页一键快传用）：内部列出未同步文件后走 startWifiTransfer。
   startWifiTransferPending: () => Promise<void>;
+  // 蓝牙同步进行中，一键切到 WiFi 快传：打断 BLE，剩余未同步文件改走 WiFi（不重传已传完的）。
+  switchToWifiTransfer: () => Promise<void>;
   // 自动入网失败后，用户已手动连上热点，点此继续传输。
   continueWifiAfterManualJoin: () => Promise<void>;
   cancelWifiTransfer: () => void;
@@ -230,6 +235,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   changeHotspot: noop,
   startWifiTransfer: noop,
   startWifiTransferPending: noop,
+  switchToWifiTransfer: noop,
   continueWifiAfterManualJoin: noop,
   cancelWifiTransfer: () => {},
   resetWifiTransfer: () => {},
@@ -280,6 +286,7 @@ async function authenticateOrGuide(client: Mr20Client): Promise<void> {
 
 export function Mr20Provider({children}: {children: React.ReactNode}) {
   const clientRef = useRef<Mr20Client | null>(null);
+  const {requestAiConsent} = useAIConsent();
 
   const [screenOpen, setScreenOpen] = useState(false);
   const [connState, setConnState] = useState<Mr20ConnState>('idle');
@@ -322,6 +329,11 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const lastResultCompletedRef = useRef(0);
   // 同步中断标志：stopSync 置 true，syncAllFiles 每个文件前检查并停下。
   const syncCancelRef = useRef(false);
+  // syncing 的实时镜像：switchToWifiTransfer 要轮询等 runSync 收尾，闭包读 React 态会拿到旧值。
+  const syncingRef = useRef(false);
+  useEffect(() => {
+    syncingRef.current = syncing;
+  }, [syncing]);
   // 设备删除中断标志 + 实时镜像（供 runSync/startWifiTransfer 读，避免闭包旧值）。
   const deleteCancelRef = useRef(false);
   const deletingDeviceRef = useRef(false);
@@ -385,12 +397,28 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     return client;
   }, []);
 
-  // 启动时检查是否已有配对设备
+  // 当前登录账号 id（持久化、离线可得）——MR20 本地数据按它分区。
+  const {userId} = useAuth();
+  const prevUserIdRef = useRef<string | null | undefined>(undefined);
+
+  // 启动 + 账号切换时载入**本账号**的本地数据。作用域已由 AuthContext 在 hydrate/login/
+  // logout 设好；这里防御性再设一次（幂等），并按新作用域重载 paired/inbox。
   useEffect(() => {
+    setMr20Scope(userId);
     getPairedDevice()
       .then(p => setHasPaired(!!p))
       .catch(() => undefined);
     getInbox().then(setInbox).catch(() => undefined);
+    // 真正换账号（非首次挂载）：清掉上个账号残留的批处理/处理中态，避免串号。
+    if (prevUserIdRef.current !== undefined && prevUserIdRef.current !== userId) {
+      setCurrentBatch(null);
+      setProcessingIds([]);
+    }
+    prevUserIdRef.current = userId;
+  }, [userId]);
+
+  // 卸载时销毁 BLE client（仅一次，勿绑 userId——否则账号变动会误销毁连接）。
+  useEffect(() => {
     return () => {
       clientRef.current?.destroy();
       clientRef.current = null;
@@ -789,6 +817,38 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     await startWifiTransfer(pending);
   }, [startWifiTransfer]);
 
+  /**
+   * 传输中途把「蓝牙同步」切成「WiFi 快传」：打断 BLE → 等它收尾 → 剩余未同步文件改走 WiFi。
+   * 已下好的文件此时已进「已同步集合」，listPendingFiles 会跳过，不会重传。
+   *
+   * 不只是为了快：BLE 文件流与实时录音流共用 a1 特征值，设备边录边传会污染文件流导致
+   * 传输永久卡死（进度条满格但 OFF 不来）。此时 WiFi（字节走 TCP）是唯一的自救路径。
+   */
+  const switchToWifiTransfer = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) {
+      return;
+    }
+    if (!isMr20WifiAvailable) {
+      setError('WiFi 快传需要更新原生模块：请 cd ios && pod install 后重新编译运行 App。');
+      return;
+    }
+    // 1) 打断当前 BLE 传输（同 stopSync：置中断标志 + SHUT 打断在传的那条）。
+    syncCancelRef.current = true;
+    await client.abortTransfer().catch(() => undefined);
+    // 2) 等 runSync 的 finally 落下 syncing。BLE 命令必须串行——抢跑会让 WiFi 流程的
+    //    列目录命令与同步的收尾应答交错，两边都可能卡住。最多等 10s。
+    for (let i = 0; i < 50 && syncingRef.current; i += 1) {
+      await new Promise<void>(resolve => setTimeout(resolve, 200));
+    }
+    if (syncingRef.current) {
+      setError('蓝牙传输未能及时停止，请先取消传输后再用 WiFi 快传。');
+      return;
+    }
+    // 3) 剩余未同步文件走 WiFi（内部自己开热点→入网→收流，失败会引导手动连）。
+    await startWifiTransferPending();
+  }, [startWifiTransferPending]);
+
   // 用户已手动连上热点 → 继续传输（沿用上次勾选的文件）。
   const continueWifiAfterManualJoin = useCallback(async () => {
     const client = clientRef.current;
@@ -919,6 +979,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       if (!items.length) {
         return;
       }
+      const allowed = await requestAiConsent({
+        data: `${items.length} 条设备录音及其已有转写文本`,
+        purpose: '上传录音并进行语音转写、场景总结和问题生成',
+      });
+      if (!allowed) {
+        return;
+      }
       setError(null);
       const ids = items.map(i => i.id);
       setProcessingIds(prev => Array.from(new Set([...prev, ...ids])));
@@ -962,7 +1029,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         setProcessingIds(prev => prev.filter(id => !ids.includes(id)));
       }
     },
-    [refreshInbox, pollBatch],
+    [refreshInbox, pollBatch, requestAiConsent],
   );
 
   // 单条：上传该条 + 起一个新批次。
@@ -1287,6 +1354,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     changeHotspot,
     startWifiTransfer,
     startWifiTransferPending,
+    switchToWifiTransfer,
     continueWifiAfterManualJoin,
     cancelWifiTransfer,
     resetWifiTransfer,

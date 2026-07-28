@@ -112,7 +112,18 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     [files, selected],
   );
   const selectedBytes = selectedFiles.reduce((n, f) => n + (f.size || 0), 0);
-  const allSelected = files.length > 0 && selected.size === files.length;
+  // 「全选」目标：只挑未传输的；整组都已传完时才回退到全部（否则全选按钮变哑）。
+  // 已传输的仍可单条点选重传，只是不进「全选」——这正是用户反馈要的排除。
+  const selectTargets = useCallback(
+    (items: Mr20File[]) => {
+      const untx = items.filter(f => !transferred.has(keyOf(f)));
+      return untx.length ? untx : items;
+    },
+    [transferred],
+  );
+  const topTargets = useMemo(() => selectTargets(files), [selectTargets, files]);
+  const allSelected =
+    topTargets.length > 0 && topTargets.every(f => selected.has(keyOf(f)));
 
   // 「清理已传输」的目标集 + 选中项里尚未传输的条数（决定删除弹窗用哪套警告文案）。
   const transferredFiles = useMemo(
@@ -128,6 +139,12 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     () => (openDir ? groups.find(([d]) => d === openDir)?.[1] ?? [] : []),
     [openDir, groups],
   );
+  const openTargets = useMemo(
+    () => selectTargets(openItems),
+    [selectTargets, openItems],
+  );
+  const openAllSelected =
+    openTargets.length > 0 && openTargets.every(f => selected.has(keyOf(f)));
 
   const toggleKeys = useCallback((keys: string[], on: boolean) => {
     setSelected(prev => {
@@ -153,8 +170,8 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
   }, []);
 
   const toggleAll = useCallback(() => {
-    toggleKeys(files.map(keyOf), !allSelected);
-  }, [files, allSelected, toggleKeys]);
+    toggleKeys(topTargets.map(keyOf), !allSelected);
+  }, [topTargets, allSelected, toggleKeys]);
 
   const dirSelCount = useCallback(
     (items: Mr20File[]) => items.filter(f => selected.has(keyOf(f))).length,
@@ -254,13 +271,12 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
             <View style={st.selectHead}>
               <Text style={st.selectTitle}>{openDir}</Text>
               <TouchableOpacity
-                onPress={() => {
-                  const keys = openItems.map(keyOf);
-                  toggleKeys(keys, dirSelCount(openItems) !== openItems.length);
-                }}
+                onPress={() =>
+                  toggleKeys(openTargets.map(keyOf), !openAllSelected)
+                }
                 hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
                 <Text style={st.selectAll}>
-                  {dirSelCount(openItems) === openItems.length ? '取消全选' : '全选'}
+                  {openAllSelected ? '取消全选' : '全选'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -305,7 +321,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
             </View>
             <View style={st.headHintRow}>
               <Text style={st.headHint}>
-                已传输的录音仍在列表中，可重新传输以覆盖本地文件。
+                「全选」只勾未传输的；已传输的仍在列表中，可单条点选重新传输覆盖本地。
               </Text>
               {/* 整机维护动作，属于「全部设备录音」，故只在一级出现、也不放进按选择走的 footer。
                   用蓝色而非红色：这是安全变体（手机副本还在），标红会训练用户忽略红色。 */}
@@ -326,14 +342,15 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
             </View>
             <View style={st.rowGap}>
               {groups.map(([dir, items]) => {
-                const sel = dirSelCount(items);
-                const all = sel === items.length;
+                const sel = dirSelCount(items); // 展示「已选」用总数（含手动选的已传输项）
+                const tgt = selectTargets(items); // 「全选」目标：未传输的（整天传完才回退全部）
+                const all = tgt.every(f => selected.has(keyOf(f)));
                 const bytes = items.reduce((n, f) => n + (f.size || 0), 0);
                 const done = items.filter(f => transferred.has(keyOf(f))).length;
                 return (
                   <View key={dir} style={st.folderRow}>
                     <TouchableOpacity
-                      onPress={() => toggleKeys(items.map(keyOf), !all)}
+                      onPress={() => toggleKeys(tgt.map(keyOf), !all)}
                       hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
                       <View
                         style={[

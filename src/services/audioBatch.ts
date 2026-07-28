@@ -9,6 +9,7 @@
  * userId 由后端从 token 推断（见 AudioBatchController.createBatch），无需前端传。
  */
 import {baseRequest} from '../apis/core/request';
+import {assertAiConsentGranted} from '../privacy/consentRuntime';
 
 /**
  * 提交项：
@@ -106,6 +107,7 @@ export function isBatchTerminal(status: string | undefined): boolean {
 export async function createAudioBatch(
   audios: AudioBatchInput[],
 ): Promise<BatchGroupResult> {
+  assertAiConsentGranted();
   return baseRequest<BatchGroupResult>({
     method: 'POST',
     path: '/app/audio/batch',
@@ -135,6 +137,7 @@ export async function getBatchResult(
 
 /** 重试该批次中失败的文件：POST /app/audio/batch/{groupId}/retry。 */
 export async function retryBatch(groupId: string): Promise<BatchRetryResult> {
+  assertAiConsentGranted();
   return baseRequest<BatchRetryResult>({
     method: 'POST',
     path: `/app/audio/batch/${encodeURIComponent(groupId)}/retry`,
@@ -157,6 +160,7 @@ export async function listAudioBatches(
 export async function getBatchPresignedUrls(
   request: BatchPresignRequest,
 ): Promise<PresignedUrlItem[]> {
+  assertAiConsentGranted();
   return baseRequest<PresignedUrlItem[]>({
     method: 'POST',
     path: '/app/audio/getPresignedUrl/batch',

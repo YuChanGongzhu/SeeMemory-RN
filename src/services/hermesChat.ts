@@ -2,6 +2,7 @@ import EventSource from 'react-native-sse';
 import type {ChatMessage} from '../types/chat';
 import {getBaseApiUrl} from '../apis/core/env';
 import {getAuthToken, handleUnauthorized} from '../apis/core/session';
+import {assertAiConsentGranted} from '../privacy/consentRuntime';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -36,6 +37,7 @@ export interface StreamHandle {
 // 后端按当前记忆 mode 自动分流云端 imemory / 本地盒子，前端不再直连 remote.seemem.com。
 // RN 的 fetch 读不了流式 body，因此用 react-native-sse（XHR）支持 POST + 自定义头。
 export function streamChat(params: StreamChatParams): StreamHandle {
+  assertAiConsentGranted();
   const {messages, onDelta, onDone, onError} = params;
 
   let assistantText = '';

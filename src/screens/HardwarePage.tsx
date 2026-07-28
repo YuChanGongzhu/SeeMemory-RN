@@ -27,10 +27,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Cloud,
+  FileText,
   Mic,
   MoreHorizontal,
   Pause,
   Play,
+  RefreshCw,
   Trash2,
 } from 'lucide-react-native';
 import {colors, radius, shadow} from '../design/tokens';
@@ -42,6 +44,13 @@ import {useMr20} from '../hooks/useMr20';
 import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
 import {resolveLocalPath} from '../services/mr20Sync';
+import {scopedKey} from '../services/mr20Scope';
+import {
+  getLegacyMigrationInfo,
+  migrateLegacyToScope,
+  Mr20MigrateNeedsRebuildError,
+} from '../services/mr20Migrate';
+import {useAuth} from '../auth/AuthContext';
 import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../services/mediaFormat';
 import {IosAlert, SubHeader, HW, type HwSubPage} from './hardware/parts';
 import {DeviceSettings} from './hardware/DeviceSettings';
@@ -54,8 +63,10 @@ import {OtaUpdate} from './hardware/OtaUpdate';
 import {AboutDevice} from './hardware/AboutDevice';
 import {HelpFeedback} from './hardware/HelpFeedback';
 
-const ALIAS_KEY = '@ringmemory:mr20:alias';
-const AUTODL_KEY = '@ringmemory:mr20:autodl';
+// 别名/自动同步/自动转文字偏好也按登录账号取作用域（scope=null 时回退旧全局 key）。在调用点现取。
+const aliasKey = () => scopedKey('alias');
+const autodlKey = () => scopedKey('autodl'); // 自动同步（设备→手机下载）
+const autotxKey = () => scopedKey('autotx'); // 自动转文字（同步后自动上传转写）
 
 function fmtDuration(total: number): string {
   const s = Math.max(0, Math.round(total));
@@ -137,12 +148,15 @@ export function HardwarePage() {
     syncSelected,
     refreshDeviceFiles,
     processItems,
+    processAllPending,
     deleteItems,
     refreshStatus,
+    refreshInbox,
     clearError,
     forgetDevice,
   } = useMr20();
   const playback = useAudioPlayback();
+  const {userId} = useAuth();
 
   const [subPage, setSubPage] = useState<HwSubPage>('main');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null); // 展开查看某天录音
@@ -154,23 +168,71 @@ export function HardwarePage() {
   const [disconnectAsk, setDisconnectAsk] = useState(false);
   const [unbindAsk, setUnbindAsk] = useState(false);
   const [alias, setAlias] = useState('');
-  const [autoDownload, setAutoDownload] = useState(false);
+  const [autoDownload, setAutoDownload] = useState(false); // 自动同步（设备→手机）
+  // 自动转文字（同步后自动上传转写）：**默认开启**，本地无记录时按开处理。
+  // autoTxLoaded 在偏好从 AsyncStorage 读回来前挡住自动触发——否则用户明明关过，
+  // 读盘前的这一瞬 true 会抢跑一次上传 + 全屏 AI 授权弹窗。
+  const [autoTranscribe, setAutoTranscribe] = useState(true);
+  const [autoTxLoaded, setAutoTxLoaded] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [pendingName, setPendingName] = useState(''); // 正在连接的设备名（覆盖层展示）
+  // 历史（旧全局、不绑账号）本地录音的迁移入口：{migrated, count}；仅在未迁移且有条数时提示。
+  const [migrateInfo, setMigrateInfo] = useState<{migrated: boolean; count: number} | null>(null);
+  const [migrating, setMigrating] = useState(false);
 
   const connected = connState === 'connected';
   const busy = connState === 'scanning' || connState === 'connecting' || connState === 'pairing';
   const autoDlRef = useRef(false);
+  // 自动转文字重入闩：busy 防并发触发；key 记住「上一批已自动提交过的 synced 集合」，
+  // 使同一批只自动触发一次——即便用户在同意弹窗里取消（条目仍为 synced）也不会反复弹窗。
+  const autoTxBusyRef = useRef(false);
+  const autoTxKeyRef = useRef('');
   // 门控「传输完成自动返回主页」：记录上一拍的传输态，只在真正发生过传输后
   // 触发一次返回，避免初始 false / 误触发。
   const bleWasSyncingRef = useRef(false);
   const wifiWasActiveRef = useRef(false);
 
-  // 本地偏好：设备别名 + 自动下载开关。
+  // 本地偏好：设备别名 + 自动同步 + 自动转文字开关。
   useEffect(() => {
-    AsyncStorage.getItem(ALIAS_KEY).then(v => v && setAlias(v)).catch(() => undefined);
-    AsyncStorage.getItem(AUTODL_KEY).then(v => setAutoDownload(v === '1')).catch(() => undefined);
+    AsyncStorage.getItem(aliasKey()).then(v => v && setAlias(v)).catch(() => undefined);
+    AsyncStorage.getItem(autodlKey()).then(v => setAutoDownload(v === '1')).catch(() => undefined);
+    // 只有显式存过 '0' 才算关；null（从没动过）走默认开启。读盘失败也保持默认开。
+    AsyncStorage.getItem(autotxKey())
+      .then(v => setAutoTranscribe(v == null ? true : v === '1'))
+      .catch(() => undefined)
+      .finally(() => setAutoTxLoaded(true));
   }, []);
+
+  // 检测是否有旧全局（不绑账号）本地录音待归入当前账号。随 userId 变化重查。
+  useEffect(() => {
+    getLegacyMigrationInfo().then(setMigrateInfo).catch(() => undefined);
+  }, [userId]);
+
+  // 手动迁移：把历史本地录音（key + 文件）归入当前账号，然后刷新「我的录音」。
+  const runMigrate = useCallback(async () => {
+    if (!userId || migrating) {
+      return;
+    }
+    setMigrating(true);
+    try {
+      const n = await migrateLegacyToScope(userId);
+      await refreshInbox();
+      const info = await getLegacyMigrationInfo();
+      setMigrateInfo(info);
+      Alert.alert('已归入当前账号', `${n} 条本地录音已归入，可在「我的录音」查看。`);
+    } catch (e) {
+      if (e instanceof Mr20MigrateNeedsRebuildError) {
+        Alert.alert('需要更新 App', '迁移本地录音文件需更新到最新版本后重试。');
+      } else {
+        Alert.alert('迁移失败', String((e as Error)?.message || e));
+      }
+    } finally {
+      setMigrating(false);
+    }
+  }, [userId, migrating, refreshInbox]);
+
+  const showMigrateBanner =
+    !!migrateInfo && !migrateInfo.migrated && migrateInfo.count > 0;
 
   // 离开页面停扫描。
   useEffect(() => () => stopScan(), [stopScan]);
@@ -209,15 +271,61 @@ export function HardwarePage() {
   }, [connected]);
 
   // 自动下载：开启且有待同步文件时，连上后自动同步一次。
+  // wifiPhase 必须为 idle——切到 WiFi 快传后 syncing 立刻落回 false，只看 !syncing 会让
+  // 蓝牙自动同步在 WiFi 传输进行中被拉起来，两条链路抢 BLE 打架。
   useEffect(() => {
-    if (connected && autoDownload && !syncing && (deviceFiles?.pending ?? 0) > 0 && !autoDlRef.current) {
+    if (
+      connected &&
+      autoDownload &&
+      !syncing &&
+      wifiPhase === 'idle' &&
+      (deviceFiles?.pending ?? 0) > 0 &&
+      !autoDlRef.current
+    ) {
       autoDlRef.current = true;
       syncNow().catch(() => undefined);
     }
     if (!connected) {
       autoDlRef.current = false;
     }
-  }, [connected, autoDownload, syncing, deviceFiles, syncNow]);
+  }, [connected, autoDownload, syncing, wifiPhase, deviceFiles, syncNow]);
+
+  // 自动转文字：开启后，把「已同步(synced)但尚未上传」的录音自动上传并提交转写。
+  // 与自动同步相互独立——用户可只开其一。为避免与手动/进行中的批处理打架，且不在
+  // 同意弹窗被取消后反复弹窗，用 busy + key 双闩：key 记住已自动提交过的 synced 集合，
+  // 同一批只触发一次；有新录音同步进来（集合变化）才会再次自动触发。
+  useEffect(() => {
+    if (!autoTxLoaded) {
+      return; // 偏好还没读回来，默认值可能与用户实际设置相反，先按兵不动
+    }
+    if (!autoTranscribe) {
+      autoTxKeyRef.current = '';
+      return;
+    }
+    if (autoTxBusyRef.current || processingIds.length > 0) {
+      return;
+    }
+    // 传输中先等它结束，好让同一批同步的录音合并成一个批次一起上传转写。
+    if (syncing || wifiPhase === 'connecting' || wifiPhase === 'transferring') {
+      return;
+    }
+    const pendingIds = inbox
+      .filter(it => it.status === 'synced')
+      .map(it => it.id)
+      .sort();
+    if (pendingIds.length === 0) {
+      return;
+    }
+    const key = pendingIds.join('|');
+    if (key === autoTxKeyRef.current) {
+      return; // 这一批已自动提交过（可能用户在同意弹窗里取消），不重复触发/弹窗
+    }
+    autoTxKeyRef.current = key;
+    autoTxBusyRef.current = true;
+    processAllPending().finally(() => {
+      autoTxBusyRef.current = false;
+    });
+  }, [autoTxLoaded, autoTranscribe, syncing, wifiPhase, processingIds, inbox, processAllPending]);
 
   // 蓝牙同步完成（syncing true→false）后，若还停在设备文件页且无错误，自动回主页。
   useEffect(() => {
@@ -327,7 +435,7 @@ export function HardwarePage() {
 
   const saveAlias = useCallback((name: string) => {
     setAlias(name);
-    AsyncStorage.setItem(ALIAS_KEY, name).catch(() => undefined);
+    AsyncStorage.setItem(aliasKey(), name).catch(() => undefined);
   }, []);
 
   const toggleUploadSel = useCallback((id: string) => {
@@ -345,7 +453,15 @@ export function HardwarePage() {
   const toggleAutoDownload = useCallback(() => {
     setAutoDownload(v => {
       const next = !v;
-      AsyncStorage.setItem(AUTODL_KEY, next ? '1' : '0').catch(() => undefined);
+      AsyncStorage.setItem(autodlKey(), next ? '1' : '0').catch(() => undefined);
+      return next;
+    });
+  }, []);
+
+  const toggleAutoTranscribe = useCallback(() => {
+    setAutoTranscribe(v => {
+      const next = !v;
+      AsyncStorage.setItem(autotxKey(), next ? '1' : '0').catch(() => undefined);
       return next;
     });
   }, []);
@@ -645,6 +761,31 @@ export function HardwarePage() {
         </TouchableOpacity>
       ) : null}
 
+      {/* 历史本地录音归入当前账号：改造前录音不绑账号，登录后需手动一键归入才在「我的录音」可见。
+          连接与否都显示——离线的老用户也在这个页面（未配对视图）。 */}
+      {showMigrateBanner ? (
+        <View style={st.migrateBar}>
+          <View style={st.flex1}>
+            <Text style={st.migrateTitle}>
+              检测到 {migrateInfo?.count} 条本地录音
+            </Text>
+            <Text style={st.migrateSub}>
+              这些录音尚未归入任何账号，点「归入」后即可在「我的录音」查看和播放。
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[st.migrateBtn, migrating && st.migrateBtnDisabled]}
+            disabled={migrating}
+            onPress={runMigrate}>
+            {migrating ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={st.migrateBtnText}>归入</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {!connected ? (
         /* ---- 未配对 ---- */
         <ScrollView contentContainerStyle={st.unpairedBody} showsVerticalScrollIndicator={false}>
@@ -665,9 +806,6 @@ export function HardwarePage() {
           </View>
           <TouchableOpacity style={st.connectBtn} onPress={pair} disabled={busy}>
             <Text style={st.connectBtnText}>连接设备</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={st.buyBtn}>
-            <Text style={st.buyBtnText}>前往购买</Text>
           </TouchableOpacity>
         </ScrollView>
       ) : (
@@ -736,6 +874,40 @@ export function HardwarePage() {
             </View>
           </View>
 
+          {/* 自动化两格：自动同步 + 自动转文字（独立开关，整格可点） */}
+          <View style={st.autoGrid}>
+            <TouchableOpacity
+              style={st.autoTile}
+              activeOpacity={0.7}
+              onPress={toggleAutoDownload}>
+              <View style={st.autoTileTop}>
+                <View style={[st.autoIcon, autoDownload && st.autoIconOn]}>
+                  <RefreshCw size={16} color={autoDownload ? HW.green : HW.textTertiary} />
+                </View>
+                <View style={[st.toggle, {backgroundColor: autoDownload ? HW.green : '#E5E5EA'}]}>
+                  <View style={[st.knob, {left: autoDownload ? 22 : 2}]} />
+                </View>
+              </View>
+              <Text style={st.autoLabel} numberOfLines={1}>自动同步</Text>
+              <Text style={st.autoHint} numberOfLines={1}>新录音自动下载</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={st.autoTile}
+              activeOpacity={0.7}
+              onPress={toggleAutoTranscribe}>
+              <View style={st.autoTileTop}>
+                <View style={[st.autoIcon, autoTranscribe && st.autoIconOn]}>
+                  <FileText size={16} color={autoTranscribe ? HW.green : HW.textTertiary} />
+                </View>
+                <View style={[st.toggle, {backgroundColor: autoTranscribe ? HW.green : '#E5E5EA'}]}>
+                  <View style={[st.knob, {left: autoTranscribe ? 22 : 2}]} />
+                </View>
+              </View>
+              <Text style={st.autoLabel} numberOfLines={1}>自动转文字</Text>
+              <Text style={st.autoHint} numberOfLines={1}>下载后自动转写</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* 录音列表 */}
           <View style={st.listHead}>
             <Text style={st.listTitle}>我的录音</Text>
@@ -763,20 +935,6 @@ export function HardwarePage() {
               ))}
             </View>
           )}
-
-          {/* 自动下载开关 */}
-          <View style={st.autoCard}>
-            <View style={{flex: 1, paddingRight: 16}}>
-              <Text style={st.autoTitle}>自动下载新录音</Text>
-              <Text style={st.autoSub}>连接设备后自动下载新录音，建议开启 WiFi 时使用</Text>
-            </View>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={toggleAutoDownload}
-              style={[st.toggle, {backgroundColor: autoDownload ? HW.green : '#E5E5EA'}]}>
-              <View style={[st.knob, {left: autoDownload ? 22 : 2}]} />
-            </TouchableOpacity>
-          </View>
         </ScrollView>
       )}
 
@@ -955,6 +1113,12 @@ const st = StyleSheet.create({
   headerBtn: {width: 40, height: 36, alignItems: 'center', justifyContent: 'center'},
   headerTitle: {flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: HW.textMain},
   errorBar: {flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: HW.red, paddingHorizontal: 16, paddingVertical: 10},
+  migrateBar: {flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: 'rgba(10,132,255,0.08)', marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(10,132,255,0.2)'},
+  migrateTitle: {fontSize: 14, fontWeight: '700', color: HW.textMain, marginBottom: 2},
+  migrateSub: {fontSize: 12, color: HW.textSub, lineHeight: 17},
+  migrateBtn: {paddingHorizontal: 18, height: 36, borderRadius: 18, backgroundColor: HW.blue, alignItems: 'center', justifyContent: 'center'},
+  migrateBtnDisabled: {backgroundColor: HW.textTertiary},
+  migrateBtnText: {color: '#fff', fontSize: 14, fontWeight: '700'},
   errorText: {flex: 1, color: '#fff', fontSize: 13, lineHeight: 18},
 
   // 未配对
@@ -966,8 +1130,6 @@ const st = StyleSheet.create({
   featText: {fontSize: 14, fontWeight: '600', color: '#3A3A3C'},
   connectBtn: {width: '100%', height: 56, backgroundColor: colors.darkCard, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12},
   connectBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
-  buyBtn: {width: '100%', height: 56, backgroundColor: HW.fill, borderRadius: 16, alignItems: 'center', justifyContent: 'center'},
-  buyBtnText: {color: HW.textMain, fontSize: 16, fontWeight: '700'},
 
   // 已配对
   pairedBody: {padding: 20},
@@ -1020,9 +1182,16 @@ const st = StyleSheet.create({
   recActionBtn: {width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: HW.fill},
   localTag: {flexDirection: 'row', alignItems: 'center', gap: 4},
   localTagText: {fontSize: 13, fontWeight: '700', color: HW.textSub},
-  autoCard: {flexDirection: 'row', alignItems: 'center', backgroundColor: HW.pageBg, borderRadius: 20, padding: 16, marginTop: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
-  autoTitle: {fontSize: 14, fontWeight: '700', color: HW.textMain, marginBottom: 4},
-  autoSub: {fontSize: 12, color: HW.textSub, lineHeight: 17},
+  // 自动化两格：与上方 statGrid 同构（flex:1 + gap:12），材质对齐页面里的白卡
+  // （HW.card + shadow.soft + radius 20，同 dateRow）。早先用 HW.pageBg 与页面同色，
+  // 只剩一条 0.03 的淡边，整块发虚——白卡+软阴影才立得起来。
+  autoGrid: {flexDirection: 'row', gap: 12, marginBottom: 24},
+  autoTile: {flex: 1, backgroundColor: HW.card, borderRadius: 20, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder, ...shadow.soft},
+  autoTileTop: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14},
+  autoIcon: {width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: HW.fill},
+  autoIconOn: {backgroundColor: 'rgba(52,199,89,0.12)'}, // 开启态跟随开关的绿，图标一起变绿
+  autoLabel: {fontSize: 15, fontWeight: '700', color: HW.textMain, letterSpacing: -0.2, marginBottom: 3},
+  autoHint: {fontSize: 11, color: HW.textSub, fontWeight: '500'},
   toggle: {width: 44, height: 24, borderRadius: 12, justifyContent: 'center'},
   knob: {position: 'absolute', width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.12, shadowRadius: 2, elevation: 2},
 

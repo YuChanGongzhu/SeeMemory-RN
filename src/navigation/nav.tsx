@@ -15,6 +15,7 @@ export type ScreenName =
   | 'membership'
   | 'powerStore'
   | 'profile'
+  | 'privacyAi'
   | 'timeline';
 
 export interface Frame {

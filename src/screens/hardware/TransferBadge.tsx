@@ -67,6 +67,7 @@ export function TransferBadge({bottom = 28}: {bottom?: number} = {}) {
     wifiSummary,
     wifiCred,
     cancelWifiTransfer,
+    switchToWifiTransfer,
     continueWifiAfterManualJoin,
     resetWifiTransfer,
     error,
@@ -178,6 +179,12 @@ export function TransferBadge({bottom = 28}: {bottom?: number} = {}) {
           {failed ? (
             <Text style={st.hintText}>{error || '已传完的录音已保留，可重试剩余文件。'}</Text>
           ) : null}
+          {/* 蓝牙传输中才提示切换：WiFi 快传本身就是高速链路，没有可切的对象。 */}
+          {bleActive ? (
+            <Text style={st.hintText}>
+              蓝牙较慢，可切到 WiFi 快传（约快 10×）。已传完的不会重传。
+            </Text>
+          ) : null}
 
           <View style={st.actions}>
             {kind === 'manual' ? (
@@ -192,9 +199,21 @@ export function TransferBadge({bottom = 28}: {bottom?: number} = {}) {
                 </TouchableOpacity>
               </>
             ) : busy ? (
-              <TouchableOpacity style={st.ghostBtn} onPress={cancel}>
-                <Text style={st.ghostBtnText}>取消传输</Text>
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity style={st.ghostBtn} onPress={cancel}>
+                  <Text style={st.ghostBtnText}>取消传输</Text>
+                </TouchableOpacity>
+                {/* 蓝牙同步中途改走 WiFi：打断 BLE 后用 WiFi 续传剩余文件。
+                    WiFi 快传自身进行中不显示（无处可切）。 */}
+                {bleActive ? (
+                  <TouchableOpacity
+                    style={st.primaryBtn}
+                    onPress={() => switchToWifiTransfer().catch(() => undefined)}>
+                    <Rocket size={15} color="#fff" />
+                    <Text style={st.primaryBtnText}>切 WiFi 快传</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             ) : (
               <TouchableOpacity style={st.primaryBtn} onPress={dismiss}>
                 <Text style={st.primaryBtnText}>知道了</Text>
@@ -252,6 +271,6 @@ const st = StyleSheet.create({
   actions: {flexDirection: 'row', gap: 10, marginTop: 14},
   ghostBtn: {flex: 1, height: 42, borderRadius: 12, backgroundColor: HW.fill, alignItems: 'center', justifyContent: 'center'},
   ghostBtnText: {fontSize: 14, color: HW.textMain, fontWeight: '600'},
-  primaryBtn: {flex: 1, height: 42, borderRadius: 12, backgroundColor: HW.blue, alignItems: 'center', justifyContent: 'center'},
+  primaryBtn: {flex: 1, flexDirection: 'row', gap: 6, height: 42, borderRadius: 12, backgroundColor: HW.blue, alignItems: 'center', justifyContent: 'center'},
   primaryBtnText: {fontSize: 14, color: '#fff', fontWeight: '700'},
 });

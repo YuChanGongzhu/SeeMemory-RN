@@ -1,4 +1,5 @@
 import {baseRequest, BizError} from '../core/request';
+import {assertAiConsentGranted} from '../../privacy/consentRuntime';
 
 /**
  * 记忆修正命令（corrections v2）—— 走 manager-api /app/memory/corrections（auth_token）。
@@ -113,6 +114,7 @@ async function withErrorMessage<T>(promise: Promise<T>, fallback: string): Promi
 // 同步段要跑一次 LLM 蒸馏，超时给足 60s（对齐 summaries.createMemorySummary）。
 // 注意：受理成功返回的是 status='accepted'，不是 HTTP 202——Python 的 202 在 Java 层被降级成 200。
 export function submitMemoryCorrection(params: SubmitCorrectionParams): Promise<MemoryCorrection> {
+  assertAiConsentGranted();
   return withErrorMessage(
     baseRequest<MemoryCorrection>({
       method: 'POST',
@@ -142,6 +144,7 @@ export function getMemoryCorrection(correctionId: string): Promise<MemoryCorrect
 
 // POST /app/memory/corrections/{correctionId}/retry — 重试终态 failed 的命令（无请求体）。
 export function retryMemoryCorrection(correctionId: string): Promise<MemoryCorrection> {
+  assertAiConsentGranted();
   return withErrorMessage(
     baseRequest<MemoryCorrection>({
       method: 'POST',

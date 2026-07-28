@@ -13,6 +13,7 @@ import {
   createMemorySummary,
   type MemorySummaryDetail, type SummaryType, type SummaryPeriodType,
 } from '../apis/requests/summaries';
+import {useAIConsent} from '../privacy/AIConsentContext';
 
 type Dim = SummaryType; // 'time' | 'person' | 'event'
 
@@ -55,6 +56,7 @@ export function CreateSummarySheet({
   onClose: () => void;
   onGenerated: (detail: MemorySummaryDetail) => void | Promise<void>;
 }) {
+  const {requestAiConsent} = useAIConsent();
   const [dim, setDim] = useState<Dim>('time');
   const [gran, setGran] = useState<SummaryPeriodType>('daily');
   const [customStart, setCustomStart] = useState('');
@@ -145,6 +147,13 @@ export function CreateSummarySheet({
 
   const onGenerate = async () => {
     if (!canGenerate) return;
+    const allowed = await requestAiConsent({
+      data: '所选时间、人物或事件范围内的记忆内容',
+      purpose: '发送给第三方 AI 服务生成多维总结',
+    });
+    if (!allowed) {
+      return;
+    }
     setGenerating(true);
     setError(null);
     try {

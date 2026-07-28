@@ -1,4 +1,5 @@
 import {baseRequest} from '../core/request';
+import {assertAiConsentGranted} from '../../privacy/consentRuntime';
 
 type SummaryPeriodType = 'daily' | 'weekly' | 'monthly' | 'custom';
 type SummaryType = 'time' | 'person' | 'event';
@@ -110,6 +111,7 @@ export interface CreateMemorySummaryRequest {
 export function createMemorySummary(
   req: CreateMemorySummaryRequest,
 ): Promise<MemorySummaryDetail> {
+  assertAiConsentGranted();
   return baseRequest<MemorySummaryDetail>({
     method: 'POST',
     path: '/app/memory/summary',

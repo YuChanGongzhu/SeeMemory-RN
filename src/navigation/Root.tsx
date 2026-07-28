@@ -15,6 +15,7 @@ import {MembershipPage} from '../screens/MembershipPage';
 import {PowerStorePage} from '../screens/PowerStorePage';
 import {ProfilePage} from '../screens/ProfilePage';
 import {TimelinePage} from '../screens/TimelinePage';
+import {PrivacyAIPage} from '../screens/PrivacyAIPage';
 
 function renderScreen(name: Frame['name']) {
   switch (name) {
@@ -44,6 +45,8 @@ function renderScreen(name: Frame['name']) {
       return <PowerStorePage />;
     case 'profile':
       return <ProfilePage />;
+    case 'privacyAi':
+      return <PrivacyAIPage />;
     case 'timeline':
       return <TimelinePage />;
     default:

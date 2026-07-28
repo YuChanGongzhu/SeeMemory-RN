@@ -1,4 +1,5 @@
 import {baseRequest} from '../core/request';
+import {assertAiConsentGranted} from '../../privacy/consentRuntime';
 
 type MediaGroup = 'image' | 'video' | 'audio' | 'document' | 'archive' | 'other';
 
@@ -132,6 +133,7 @@ function formatOccurredAt(date: Date): string {
 // App 手记：一条 role=user 的消息入记忆，source=chat_app。async_exec 让落库不阻塞返回。
 // 设备录音走的是另一条链路（batch → import_device_audio），不用这个。
 export function saveMemory(content: string): Promise<SaveMemoryResponse> {
+  assertAiConsentGranted();
   return baseRequest<SaveMemoryResponse>({
     method: 'POST',
     path: '/app/memory/save',

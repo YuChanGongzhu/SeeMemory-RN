@@ -8,6 +8,7 @@ import {useCallback, useRef, useState} from 'react';
 import {Platform, PermissionsAndroid} from 'react-native';
 import {AudioRecorderModule, isAudioRecorderAvailable} from '../native/AudioRecorderModule';
 import {transcribeVoice} from '../apis/requests/audioTranscribe';
+import {useAIConsent} from '../privacy/AIConsentContext';
 
 export type VoiceInputStatus = 'idle' | 'recording' | 'transcribing';
 
@@ -46,6 +47,7 @@ export interface VoiceInput {
 }
 
 export function useVoiceInput(onResult: (result: VoiceResult) => void): VoiceInput {
+  const {requestAiConsent} = useAIConsent();
   const [status, setStatus] = useState<VoiceInputStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false); // 防止 start/stop 并发重入
@@ -83,6 +85,13 @@ export function useVoiceInput(onResult: (result: VoiceResult) => void): VoiceInp
     busyRef.current = true;
     try {
       const {filePath, durationMs} = await AudioRecorderModule.stopRecording();
+      const allowed = await requestAiConsent({
+        data: '本次录制的音频',
+        purpose: '发送给语音识别服务并转换为文字',
+      });
+      if (!allowed) {
+        return;
+      }
       setStatus('transcribing');
       const text = await transcribeVoice({filePath, language: 'zh-CN'});
       if (text) {
@@ -96,7 +105,7 @@ export function useVoiceInput(onResult: (result: VoiceResult) => void): VoiceInp
       busyRef.current = false;
       setStatus('idle');
     }
-  }, [status, onResult]);
+  }, [status, onResult, requestAiConsent]);
 
   const cancel = useCallback(async () => {
     if (status !== 'recording') {

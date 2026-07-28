@@ -68,7 +68,7 @@ export async function clearAllChatHistory(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();
     const mine = keys.filter(k => k.startsWith(PREFIX));
     if (mine.length) {
-      await AsyncStorage.multiRemove(mine);
+      await Promise.all(mine.map(key => AsyncStorage.removeItem(key)));
     }
   } catch {
     // ignore

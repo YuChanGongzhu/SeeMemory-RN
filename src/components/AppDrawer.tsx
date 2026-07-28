@@ -219,8 +219,12 @@ export function AppDrawer() {
             ))}
           </TouchableOpacity>
 
-          {/* 无数据时不画格子——假花纹比留白更容易被当成真实记录 */}
-          {activity && activity.total > 0 ? <Heatmap daily={activity.daily} /> : null}
+          {/* 无数据时不画格子——假花纹比留白更容易被当成真实记录。点击进「记忆脉络」热力视图。 */}
+          {activity && activity.total > 0 ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => go('timeline')}>
+              <Heatmap daily={activity.daily} />
+            </TouchableOpacity>
+          ) : null}
 
           {/* Menu */}
           <View style={{marginTop: 8}}>

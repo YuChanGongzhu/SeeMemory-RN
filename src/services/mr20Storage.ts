@@ -2,11 +2,14 @@
  * MR20 本地持久化：已配对设备（含 16 位密钥，用于自动重连）+ 已同步文件集合。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {scopedKey} from './mr20Scope';
 
+// 各 key 按当前登录账号取作用域（scope=null 时回退旧全局 key）。必须在**调用点**现取，
+// 不能在模块加载时求值——作用域会随登录/退登在运行时切换。
 const KEYS = {
-  PAIRED: '@ringmemory:mr20:paired',
-  SYNCED: '@ringmemory:mr20:synced',
-  BATCH: '@ringmemory:mr20:batch', // 当前/最近一次提交的后端批处理 groupId
+  PAIRED: () => scopedKey('paired'),
+  SYNCED: () => scopedKey('synced'),
+  BATCH: () => scopedKey('batch'), // 当前/最近一次提交的后端批处理 groupId
 };
 
 export interface Mr20PairedDevice {
@@ -17,11 +20,11 @@ export interface Mr20PairedDevice {
 }
 
 export async function savePairedDevice(device: Mr20PairedDevice): Promise<void> {
-  await AsyncStorage.setItem(KEYS.PAIRED, JSON.stringify(device));
+  await AsyncStorage.setItem(KEYS.PAIRED(), JSON.stringify(device));
 }
 
 export async function getPairedDevice(): Promise<Mr20PairedDevice | null> {
-  const raw = await AsyncStorage.getItem(KEYS.PAIRED);
+  const raw = await AsyncStorage.getItem(KEYS.PAIRED());
   if (!raw) {
     return null;
   }
@@ -42,7 +45,7 @@ export async function getPairedDevice(): Promise<Mr20PairedDevice | null> {
 }
 
 export async function clearPairedDevice(): Promise<void> {
-  await AsyncStorage.removeItem(KEYS.PAIRED);
+  await AsyncStorage.removeItem(KEYS.PAIRED());
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +57,7 @@ function fileKey(dir: string, fname: string): string {
 }
 
 export async function getSyncedSet(): Promise<Set<string>> {
-  const raw = await AsyncStorage.getItem(KEYS.SYNCED);
+  const raw = await AsyncStorage.getItem(KEYS.SYNCED());
   if (!raw) {
     return new Set();
   }
@@ -74,12 +77,12 @@ export async function isSynced(dir: string, fname: string): Promise<boolean> {
 export async function markSynced(dir: string, fname: string): Promise<void> {
   const set = await getSyncedSet();
   set.add(fileKey(dir, fname));
-  await AsyncStorage.setItem(KEYS.SYNCED, JSON.stringify([...set]));
+  await AsyncStorage.setItem(KEYS.SYNCED(), JSON.stringify([...set]));
 }
 
 /** 清空「已同步」集合，使下次同步重新拉取全部文件（修了解码 bug 后需重拉）。 */
 export async function clearSyncedSet(): Promise<void> {
-  await AsyncStorage.removeItem(KEYS.SYNCED);
+  await AsyncStorage.removeItem(KEYS.SYNCED());
 }
 
 // ---------------------------------------------------------------------------
@@ -87,13 +90,13 @@ export async function clearSyncedSet(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function saveBatchGroupId(groupId: string): Promise<void> {
-  await AsyncStorage.setItem(KEYS.BATCH, groupId);
+  await AsyncStorage.setItem(KEYS.BATCH(), groupId);
 }
 
 export async function getBatchGroupId(): Promise<string | null> {
-  return AsyncStorage.getItem(KEYS.BATCH);
+  return AsyncStorage.getItem(KEYS.BATCH());
 }
 
 export async function clearBatchGroupId(): Promise<void> {
-  await AsyncStorage.removeItem(KEYS.BATCH);
+  await AsyncStorage.removeItem(KEYS.BATCH());
 }

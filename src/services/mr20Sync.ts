@@ -7,6 +7,7 @@ import {Mr20Native} from '../native/mr20/Mr20Native';
 import {bytesToBase64} from '../native/mr20/protocol';
 import {getSyncedSet, markSynced} from './mr20Storage';
 import {recordSyncedFile, Mr20InboxItem} from './mr20Ingest';
+import {scopedFileRoot} from './mr20Scope';
 
 export interface SyncProgress {
   total: number; // 待同步文件总数
@@ -131,12 +132,16 @@ function ensureMp3Name(fname: string): string {
   return /\.mp3$/i.test(fname) ? fname : `${fname}.mp3`;
 }
 
-/** 同步录音在手机 Documents 下的根目录（落盘到 mr20/<dir>/<fname>.mp3）。 */
+/**
+ * 同步录音在手机 Documents 下的根目录。历史/未登录时为扁平 `mr20`；登录后按账号取
+ * `mr20/u_<userId>`（见 scopedFileRoot）。迁移按钮会把旧 `mr20` 整目录搬进用户分区。
+ * 仍导出常量供迁移等处引用旧根目录名。
+ */
 export const MR20_FILES_ROOT = 'mr20';
 
-/** 录音在 Documents 下的相对路径 mr20/<dir>/<fname>.mp3（BLE 与 WiFi 落盘共用）。 */
+/** 录音在 Documents 下的相对路径 <root>/<dir>/<fname>.mp3（BLE 与 WiFi 落盘共用）。 */
 export function mr20FileRelPath(dir: string, fname: string): string {
-  return `${MR20_FILES_ROOT}/${dir}/${ensureMp3Name(fname)}`;
+  return `${scopedFileRoot()}/${dir}/${ensureMp3Name(fname)}`;
 }
 
 /**
@@ -201,7 +206,8 @@ export async function deleteLocalFiles(
     return;
   }
   for (const it of items) {
-    const rel = `${MR20_FILES_ROOT}/${it.dir}/${ensureMp3Name(it.fname)}`;
+    // 用 mr20FileRelPath（＝当前账号分区根），与 resolveLocalPath 同源，避免删偏。
+    const rel = mr20FileRelPath(it.dir, it.fname);
     await Mr20Native.deleteRelativePath(rel).catch(() => undefined);
   }
 }
@@ -214,8 +220,26 @@ export async function deleteAllLocalFiles(): Promise<void> {
   const del = (Mr20Native as {deleteRelativePath?: (p: string) => Promise<void>})
     .deleteRelativePath;
   if (typeof del === 'function') {
-    await Mr20Native.deleteRelativePath(MR20_FILES_ROOT).catch(() => undefined);
+    // 只删当前账号分区目录（mr20/u_<userId>），不误删别的账号的录音。
+    await Mr20Native.deleteRelativePath(scopedFileRoot()).catch(() => undefined);
   }
+}
+
+/**
+ * 把一个相对目录整体搬到另一个相对位置（迁移用：mr20 → mr20/u_<userId>）。
+ * 背后是原生 moveRelativePath（FileManager.moveItem / File.renameTo）。
+ * 返回 true=成功搬移；false=原生未链接（旧二进制）——调用方据此提示“需更新 App”。
+ * 源目录不存在时原生应视为无操作并 resolve（当作成功，无历史文件可搬）。
+ */
+export async function moveDir(from: string, to: string): Promise<boolean> {
+  const move = (
+    Mr20Native as {moveRelativePath?: (f: string, t: string) => Promise<void>}
+  ).moveRelativePath;
+  if (typeof move !== 'function') {
+    return false;
+  }
+  await move(from, to);
+  return true;
 }
 
 /**

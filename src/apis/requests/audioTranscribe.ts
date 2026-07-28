@@ -1,4 +1,5 @@
 import {getBaseApiUrl} from '../core/env';
+import {assertAiConsentGranted} from '../../privacy/consentRuntime';
 import {getAuthToken} from '../core/session';
 
 /**
@@ -32,6 +33,7 @@ export async function transcribeVoice({
   language,
   mimeType = 'audio/m4a',
 }: TranscribeVoiceParams): Promise<string> {
+  assertAiConsentGranted();
   const token = getAuthToken();
   if (!token) {
     throw new Error('未登录，无法使用语音转写');
