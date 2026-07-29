@@ -334,9 +334,7 @@ export function HomeHub() {
                 data={isGuest ? DAILY_STATUS : todayMood ?? DAILY_STATUS}
                 history={isGuest ? undefined : moodHistory}
                 isGuest={isGuest}
-                onPress={() =>
-                  isGuest ? undefined : nav.push('dailyStatus', {data: todayMood ?? DAILY_STATUS})
-                }
+                onPress={() => gate(() => nav.push('dailyStatus', {data: todayMood ?? DAILY_STATUS}))}
                 onOpenHistorical={h => nav.push('historical', {data: h})}
               />
             ) : !isGuest ? (

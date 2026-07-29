@@ -187,6 +187,13 @@ export function HomeDeviceButton() {
                   ) : null}
                 </View>
               </>
+            ) : deviceFiles == null && !transferring ? (
+              /* 文件列表还没读到（连上后有 2s 稳定期 + 扫描耗时）：显示缓冲，
+                 不要抢跳「暂无新录音待同步」误导用户。 */
+              <View style={[st.noNew, st.noNewLoading]}>
+                <ActivityIndicator size="small" color={colors.auraProject} />
+                <Text style={st.noNewText}>正在读取设备录音…</Text>
+              </View>
             ) : (
               <View style={st.noNew}>
                 <Text style={st.noNewText}>
@@ -328,6 +335,7 @@ const st = StyleSheet.create({
   },
   syncBtnLightText: {color: colors.textMain, fontSize: 15, fontWeight: '700'},
   noNew: {alignItems: 'center', paddingVertical: 8},
+  noNewLoading: {flexDirection: 'row', justifyContent: 'center', gap: 8},
   noNewText: {fontSize: 14, color: colors.textSub},
 
   ghostRow: {

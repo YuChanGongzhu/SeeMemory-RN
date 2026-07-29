@@ -356,6 +356,16 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       wifiPhase === 'manual';
   }, [syncing, otaActive, deletingDevice, wifiPhase]);
 
+  // 刚连上后的稳定期：BLE 链路建立初期不稳，立刻发列目录命令容易无应答卡死。
+  // 记录连上时刻，所有文件列表读取先等满 2s 再发（已过稳定期则不等）。
+  const connectedAtRef = useRef(0);
+  const waitLinkSettle = useCallback(async () => {
+    const remain = 2000 - (Date.now() - connectedAtRef.current);
+    if (remain > 0) {
+      await new Promise<void>(r => setTimeout(r, remain));
+    }
+  }, []);
+
   // 自动重连：每个 App 会话只自动跑一次；connStateRef 供重连状态机读取实时连接态
   // （避免闭包读到旧值）。
   const reconnectStartedRef = useRef(false);
@@ -374,7 +384,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     client.on('deviceFound', d =>
       setDevices(prev => (prev.some(x => x.id === d.id) ? prev : [...prev, d])),
     );
-    client.on('connected', d => setConnectedDevice(d));
+    client.on('connected', d => {
+      connectedAtRef.current = Date.now();
+      setConnectedDevice(d);
+    });
     client.on('disconnected', () => {
       setConnectedDevice(null);
       setRecording(null);
@@ -517,13 +530,14 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       return;
     }
     try {
+      await waitLinkSettle();
       setDeviceFiles(
         await scanDeviceFiles(client, () => transferActiveRef.current),
       );
     } catch (e) {
       setError(String((e as Error)?.message || e));
     }
-  }, [connState, syncing, deletingDevice]);
+  }, [connState, syncing, deletingDevice, waitLinkSettle]);
 
   // 同步执行体：files 为空 = 全部待同步（syncAllFiles）；否则 = 勾选的子集（syncFiles）。
   const runSync = useCallback(
@@ -655,10 +669,11 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     if (!client || connState !== 'connected') {
       return [];
     }
+    await waitLinkSettle();
     return listAllDeviceFilesSvc(client, () => transferActiveRef.current).catch(
       () => [],
     );
-  }, [connState]);
+  }, [connState, waitLinkSettle]);
 
   // 热点管理：开/关热点、读 SSID/密码/状态。BLE 命令串行，getHotspotInfo 顺序发。
   const openHotspot = useCallback(async () => {
@@ -1227,6 +1242,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           // 注意：不能调用 provider 的 refreshStatus/refreshDeviceFiles —— 它们在自动重连
           // 启动时（connState 还是 'idle'）被闭包捕获，内部 connState 守卫会判「未连接」而空转，
           // 导致首页电量/存储/待同步一直为空、要进设备页才刷新。故这里绕过守卫直连 client。
+          // 刚连上时链路还不稳，立刻发列目录命令容易无应答卡死：等满稳定期再发。
+          await waitLinkSettle();
           const c = clientRef.current;
           if (!c) {
             return;
@@ -1256,7 +1273,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         cleanup();
       }
     }
-  }, [getClient, connectAndPair]);
+  }, [getClient, connectAndPair, waitLinkSettle]);
 
   // 挂载后自动尝试一次重连（内部有 ref/idle/BLE 门控，重复调用安全幂等）。
   useEffect(() => {

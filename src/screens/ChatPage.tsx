@@ -13,6 +13,7 @@ import {useHermesChat} from '../hooks/useHermesChat';
 import {useAudioPlayback, type AudioPlaybackState} from '../hooks/useAudioPlayback';
 import {useVoiceInput} from '../hooks/useVoiceInput';
 import {useImagePreview} from '../hooks/useImagePreview';
+import {useLoginPrompt} from '../hooks/useWriteGate';
 
 const WELCOME = '你好！我是你的记忆助手 ✦\n\n我可以帮你整理想法、回忆过去记录的内容，或者一起深化某个思考。今天想聊点什么？';
 
@@ -186,6 +187,7 @@ export function ChatPage() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const {isGuest} = useAuth();
+  const {show: showLoginPrompt} = useLoginPrompt();
   const {messages, isSending, send, sendVoice} = useHermesChat();
   const playback = useAudioPlayback();
   const [input, setInput] = useState('');
@@ -273,7 +275,7 @@ export function ChatPage() {
 
       <View style={[styles.inputArea, {paddingBottom: insets.bottom + 10}]}>
         {isGuest ? (
-          <TouchableOpacity style={styles.guestBanner}>
+          <TouchableOpacity style={styles.guestBanner} onPress={showLoginPrompt}>
             <Sparkles size={16} color={colors.textSub} />
             <Text style={styles.guestText}>登录后与记忆助手对话</Text>
             <ChevronRight size={16} color={colors.textSub} />

@@ -13,7 +13,7 @@ export const emoji: Record<string, ImageSourcePropType> = {
 export const images = {
   ipStar: require('../assets/images/ip-star.png'),
   hero: require('../assets/images/hero.png'),
-  device: require('../assets/images/device.jpg'),
+  device: require('../assets/images/mr20-device.png'),
   avatar: require('../assets/images/avatar.jpg'),
   sample1: require('../assets/images/sample1.jpg'),
 };

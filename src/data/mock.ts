@@ -14,9 +14,9 @@ const U = (id: string) => `https://images.unsplash.com/photo-${id}?q=80&w=1200&a
  * DEMO_MEMORIES 演示数据）。
  */
 export const WELCOME_MEMORY: MemoryCard = {
-  id: 'm4', type: 'memory', tag: '公告', title: '欢迎来到 SiMemory ✦',
-  keyQuote: 'SiMemory 的核心优势是强大的记忆检索与跨会话调用能力。', time: '今天 刚刚', hasAI: true,
-  aiSummary: 'SiMemory 是一款无感采集、AI 驱动的第二大脑工具。本篇是产品的核心功能说明与欢迎指引。',
+  id: 'm4', type: 'memory', tag: '公告', title: '欢迎来到 Remmy ✦',
+  keyQuote: 'Remmy 的核心优势是强大的记忆检索与跨会话调用能力。', time: '今天 刚刚', hasAI: true,
+  aiSummary: 'Remmy 是一款无感采集、AI 驱动的第二大脑工具。本篇是产品的核心功能说明与欢迎指引。',
   tags: ['官方公告', '产品介绍', '新手指引'],
   timelineRecords: [
     {id: 1, time: '第一步', type: 'text', content: '无感采集：无需主动触发录音，记忆在后台自动产生。'},
@@ -57,7 +57,7 @@ export const DEMO_MEMORIES: MemoryCard[] = [
     tags: ['产品思考', '增长'],
     timelineRecords: [
       {id: 10, time: '14:10', type: 'text', content: '《微习惯》这本书里提到，把目标定到小得不可思议，就能克服拖延。'},
-      {id: 11, time: '14:15', type: 'audio', duration: '1:20', name: '语音备忘', content: '（AI 自动转写）咱们是不是可以把 SiMemory 的初始记录门槛降到极低？'},
+      {id: 11, time: '14:15', type: 'audio', duration: '1:20', name: '语音备忘', content: '（AI 自动转写）咱们是不是可以把 Remmy 的初始记录门槛降到极低？'},
     ],
   },
   {

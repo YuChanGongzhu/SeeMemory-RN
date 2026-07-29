@@ -31,7 +31,7 @@ const zh: Dict = {
 
   // 开屏基础隐私页（ConsentScreen）
   'base.title': '隐私保护说明',
-  'base.lead': '欢迎使用 SiMemory。开始前，请阅读并同意我们处理基础账号与设备数据的方式。',
+  'base.lead': '欢迎使用 Remmy。开始前，请阅读并同意我们处理基础账号与设备数据的方式。',
   'base.dataTitle': '基础服务需要的数据',
   'base.dataBody':
     '登录时使用的手机号、账号标识、设备与连接信息，以及保障服务稳定和安全所需的基础日志。蓝牙和本地网络仅用于连接记忆设备及传输本地录音。',
@@ -41,7 +41,7 @@ const zh: Dict = {
   'base.readPolicy': '阅读完整《隐私政策》',
   'base.agree': '同意隐私政策并继续',
   'base.disagree': '不同意',
-  'base.disagreeMsg': '不同意《隐私政策》将无法进入 SiMemory。',
+  'base.disagreeMsg': '不同意《隐私政策》将无法进入 Remmy。',
   'base.saveFailed': '保存失败，请重试。',
 
   // 隐私与 AI 页（PrivacyAIPage）
@@ -92,7 +92,7 @@ const en: Dict = {
 
   'base.title': 'Privacy Notice',
   'base.lead':
-    'Welcome to SiMemory. Before you start, please read and agree to how we handle your basic account and device data.',
+    'Welcome to Remmy. Before you start, please read and agree to how we handle your basic account and device data.',
   'base.dataTitle': 'Data required for basic service',
   'base.dataBody':
     'The phone number used to sign in, your account identifier, device and connection information, and the basic logs needed to keep the service stable and secure. Bluetooth and the local network are used only to connect your memory device and transfer local recordings.',
@@ -102,7 +102,7 @@ const en: Dict = {
   'base.readPolicy': 'Read the full Privacy Policy',
   'base.agree': 'Agree and continue',
   'base.disagree': 'Disagree',
-  'base.disagreeMsg': 'You cannot enter SiMemory without agreeing to the Privacy Policy.',
+  'base.disagreeMsg': 'You cannot enter Remmy without agreeing to the Privacy Policy.',
   'base.saveFailed': 'Failed to save. Please try again.',
 
   'priv.back': 'Back',

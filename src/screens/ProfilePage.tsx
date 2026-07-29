@@ -48,7 +48,7 @@ export function ProfilePage() {
       closeDelete();
       // 注销成功后登录态已清空，回首页会落到登录门。
       nav.home();
-      Alert.alert('账号已注销', '你的账号已永久注销。感谢使用 SiMemory。');
+      Alert.alert('账号已注销', '你的账号已永久注销。感谢使用 Remmy。');
     } catch (e) {
       Alert.alert('注销失败', e instanceof Error && e.message ? e.message : '请稍后重试。');
     } finally {
@@ -165,7 +165,7 @@ export function ProfilePage() {
         )}
 
         <Pressable onPress={onVersionTap} style={styles.versionWrap}>
-          <Text style={styles.versionText}>SiMemory v{APP_VERSION}</Text>
+          <Text style={styles.versionText}>Remmy v{APP_VERSION}</Text>
         </Pressable>
       </ScrollView>
 

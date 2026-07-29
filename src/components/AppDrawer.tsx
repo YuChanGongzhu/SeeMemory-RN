@@ -139,7 +139,16 @@ export function AppDrawer() {
         <TouchableOpacity
           style={styles.profile}
           activeOpacity={0.7}
-          onPress={() => (isGuest ? undefined : go('profile'))}>
+          onPress={() => {
+            if (isGuest) {
+              // 抽屉自身是 Modal，再叠登录 Modal 在 iOS 上会撞 present；游客退登
+              // 即回到 AuthGate 的全屏登录页，效果等同「点击登录」。
+              closeDrawer();
+              void logout();
+              return;
+            }
+            go('profile');
+          }}>
           <Avatar source={isGuest ? undefined : undefined} size={48} fallback={name} />
           <View style={{flex: 1, marginLeft: 12}}>
             <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>

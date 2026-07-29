@@ -175,6 +175,7 @@ export function HardwarePage() {
   const [autoTranscribe, setAutoTranscribe] = useState(true);
   const [autoTxLoaded, setAutoTxLoaded] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [settling, setSettling] = useState(false); // 连上后 2s 稳定期（期间显示缓冲，不发命令）
   const [pendingName, setPendingName] = useState(''); // 正在连接的设备名（覆盖层展示）
   // 历史（旧全局、不绑账号）本地录音的迁移入口：{migrated, count}；仅在未迁移且有条数时提示。
   const [migrateInfo, setMigrateInfo] = useState<{migrated: boolean; count: number} | null>(null);
@@ -238,19 +239,32 @@ export function HardwarePage() {
   useEffect(() => () => stopScan(), [stopScan]);
 
   // 连上后拉一次状态 + 设备文件（串行，避免命令应答交错）。
+  // 刚连上时链路还不稳，立刻发列目录命令容易无应答卡死：先等 2s 让连接稳定
+  //（期间 settling=true 显示缓冲动画），再开始发命令。
   useEffect(() => {
     if (!connected) {
+      setSettling(false);
       return;
     }
     let alive = true;
-    (async () => {
-      await refreshStatus().catch(() => undefined);
-      if (alive) {
-        await refreshDeviceFiles().catch(() => undefined);
-      }
-    })();
+    setSettling(true);
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          await refreshStatus().catch(() => undefined);
+          if (alive) {
+            await refreshDeviceFiles().catch(() => undefined);
+          }
+        } finally {
+          if (alive) {
+            setSettling(false);
+          }
+        }
+      })();
+    }, 2000);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [connected, refreshStatus, refreshDeviceFiles]);
 
@@ -830,6 +844,11 @@ export function HardwarePage() {
               <View style={st.recBanner}>
                 <View style={st.recBannerDot} />
                 <Text style={st.recBannerText}>正在录音 · 已录制 {fmtDuration(recording.seconds)}</Text>
+              </View>
+            ) : settling ? (
+              <View style={st.idleBanner}>
+                <ActivityIndicator size="small" color={HW.blue} />
+                <Text style={st.idleText}>正在读取设备数据…</Text>
               </View>
             ) : (
               <View style={st.idleBanner}>
