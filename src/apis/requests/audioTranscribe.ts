@@ -60,8 +60,17 @@ export async function transcribeVoice({
   });
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`转写失败（${response.status}）${detail ? `：${detail}` : ''}`);
+    // ASR 错误一律无 X-Upstream-Source 头（上游错误也被网关映射成 CommonVO {code,msg}，
+    // 认证失败/积分不足/上游故障同形）；有头分支按全站约定保留，ASR 上实际不会命中。
+    const upstream = response.headers.get('X-Upstream-Source');
+    let message: string | undefined;
+    try {
+      const body = (await response.json()) as {msg?: string; error?: {message?: string}};
+      message = upstream ? body?.error?.message : body?.msg;
+    } catch {
+      // 非 JSON（如网关 502 HTML）落兜底文案
+    }
+    throw new Error(`转写失败（${response.status}）${message ? `：${message}` : ''}`);
   }
 
   const data = (await response.json()) as {text?: string};

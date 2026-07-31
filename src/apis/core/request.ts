@@ -10,10 +10,15 @@ export class BizError extends Error {
   }
 }
 
+// 响应形态见《对外错误响应汇总.md》，判成败以 HTTP 状态码为准。
+// baseRequest 现有调用面只会遇到两种形态（新增其他透传对接面时按该文档补分支）：
+//   无 X-Upstream-Source 头 = manager-api 自产 {code,msg,data}（200 ⟺ code=0，code 是业务码）；
+//   X-Upstream-Source: memory = memory 透传 {success,msg,data}（success 与 HTTP 状态一致）。
 interface ApiEnvelope<T> {
-  code: number;
-  msg: string;
-  data: T | null;
+  code?: number;
+  success?: boolean;
+  msg?: string;
+  data?: T | null;
 }
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -142,7 +147,23 @@ export async function baseRequest<T>(options: BaseRequestOptions): Promise<T> {
     throw new BizError(response.status, text || `请求失败（${response.status}）`);
   }
 
-  if (payload.code !== 0) {
+  if (!response.ok) {
+    // 出错：按 X-Upstream-Source 头判定错误产自谁，取对应格式里的人话（见《对外错误响应汇总.md》）
+    const upstream = response.headers.get('X-Upstream-Source');
+    let message: string | undefined;
+    let code = response.status;
+    if (!upstream) {
+      // manager-api 自产：{code,msg,data}，code 是业务码
+      message = payload.msg;
+      code = payload.code ?? response.status;
+    } else if (upstream === 'memory') {
+      message = payload.msg;
+    }
+    throw new BizError(code, message || `请求失败（${response.status}）`);
+  }
+
+  // 迁移前的旧 manager-api 失败也回 200+code≠0；服务端全量上线后此分支不会再命中，可删
+  if (payload.code !== undefined && payload.code !== 0) {
     throw new BizError(payload.code, payload.msg || `请求失败（${payload.code}）`);
   }
 
