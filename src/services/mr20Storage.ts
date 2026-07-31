@@ -10,6 +10,7 @@ const KEYS = {
   PAIRED: () => scopedKey('paired'),
   SYNCED: () => scopedKey('synced'),
   BATCH: () => scopedKey('batch'), // 当前/最近一次提交的后端批处理 groupId
+  BATCH_TRACKING: () => scopedKey('batch_tracking_v2'), // 新 App 轮询用；旧 App 忽略
 };
 
 export interface Mr20PairedDevice {
@@ -97,6 +98,48 @@ export async function getBatchGroupId(): Promise<string | null> {
   return AsyncStorage.getItem(KEYS.BATCH());
 }
 
+/**
+ * 保存新版 App 实际需要轮询的 ID。canonical groupId 仍单独写入旧 key，
+ * 保证旧版 App / App 回滚后能继续按 manager-api 的聚合 ID 查询。
+ */
+export async function saveBatchTrackingGroupIds(
+  groupId: string,
+  pollingGroupIds: string[],
+): Promise<void> {
+  await AsyncStorage.setItem(
+    KEYS.BATCH_TRACKING(),
+    JSON.stringify({groupId, pollingGroupIds}),
+  );
+}
+
+/** 读取并校验新版轮询信息；旧数据、损坏数据一律安全回退到 canonical groupId。 */
+export async function getBatchTrackingGroupIds(
+  groupId: string,
+): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(KEYS.BATCH_TRACKING());
+  if (!raw) {
+    return [groupId];
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      groupId?: unknown;
+      pollingGroupIds?: unknown;
+    };
+    if (parsed.groupId !== groupId || !Array.isArray(parsed.pollingGroupIds)) {
+      return [groupId];
+    }
+    const ids = [...new Set(parsed.pollingGroupIds.filter(
+      (id): id is string => typeof id === 'string' && id.trim().length > 0,
+    ))];
+    return ids.length ? ids : [groupId];
+  } catch {
+    return [groupId];
+  }
+}
+
 export async function clearBatchGroupId(): Promise<void> {
-  await AsyncStorage.removeItem(KEYS.BATCH());
+  await Promise.all([
+    AsyncStorage.removeItem(KEYS.BATCH()),
+    AsyncStorage.removeItem(KEYS.BATCH_TRACKING()),
+  ]);
 }

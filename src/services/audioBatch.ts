@@ -28,7 +28,11 @@ export interface AudioBatchInput {
 }
 
 export interface BatchGroupResult {
+  /** 客户端稳定追踪 ID。新版 manager-api 多组时返回聚合父 ID。 */
   groupId: string;
+  /** 内部处理组；旧 manager-api 多组时需要逐组轮询，新版可直接轮询 groupId。 */
+  groupIds?: string[];
+  totalGroups?: number;
   status: string;
   totalFiles: number;
   message?: string;
@@ -98,9 +102,107 @@ export type BatchPresignRequest =
   | {fileExtension: string; count: number}
   | {files: Array<{fileExtension: string; fileName?: string}>};
 
-/** 批处理终态：completed / completed_with_error（再轮询无意义）。 */
+/** 批处理终态（再轮询无意义）。 */
 export function isBatchTerminal(status: string | undefined): boolean {
-  return status === 'completed' || status === 'completed_with_error';
+  return status === 'completed' || status === 'completed_with_error' || status === 'failed';
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+/**
+ * 决定 App 实际轮询哪些 ID：
+ * - 新 manager-api：groupId 是不在 groupIds 中的聚合父 ID，只轮询父 ID，避免每 2.5 秒扇出请求；
+ * - 旧拆组 manager-api：groupId 就是第一子组，必须遍历 groupIds，避免只看到第一组；
+ * - 更旧的单组响应没有 groupIds，继续只轮询 groupId。
+ */
+export function resolveBatchPollingGroupIds(
+  group: Pick<BatchGroupResult, 'groupId' | 'groupIds'>,
+): string[] {
+  const canonicalGroupId = group.groupId?.trim();
+  const childGroupIds = uniqueStrings(group.groupIds || []);
+  if (canonicalGroupId && childGroupIds.length > 1 && childGroupIds.includes(canonicalGroupId)) {
+    return childGroupIds;
+  }
+  return canonicalGroupId ? [canonicalGroupId] : childGroupIds;
+}
+
+/** 把多个旧版子组进度合并成一个 UI 批次。 */
+export function mergeBatchProgress(
+  groupId: string,
+  groups: BatchProgressResult[],
+): BatchProgressResult {
+  const totalFiles = groups.reduce((sum, item) => sum + item.totalFiles, 0);
+  const completedFiles = groups.reduce((sum, item) => sum + item.completedFiles, 0);
+  const failedFiles = groups.reduce((sum, item) => sum + item.failedFiles, 0);
+  const allTerminal = groups.length > 0 && groups.every(item => isBatchTerminal(item.status));
+  const hasError = groups.some(
+    item =>
+      item.status === 'completed_with_error' ||
+      item.status === 'failed' ||
+      item.failedFiles > 0,
+  );
+  const allPending = groups.length === 0 || groups.every(item => item.status === 'pending');
+  let status = 'processing';
+  if (allTerminal) {
+    status = hasError ? 'completed_with_error' : 'completed';
+  } else if (allPending) {
+    status = 'pending';
+  }
+
+  return {
+    groupId,
+    status,
+    totalFiles,
+    completedFiles,
+    failedFiles,
+    progress: totalFiles > 0
+      ? Math.min(100, Math.floor(((completedFiles + failedFiles) * 100) / totalFiles))
+      : 0,
+  };
+}
+
+/** 合并旧版多子组结果；新版聚合父组传入单元素数组时行为不变。 */
+export function mergeBatchResults(
+  groupId: string,
+  groups: BatchResultResponse[],
+): BatchResultResponse {
+  const progress = mergeBatchProgress(
+    groupId,
+    groups.map(group => ({
+      groupId: group.groupId,
+      status: group.status,
+      totalFiles: group.totalFiles,
+      completedFiles: group.completedFiles,
+      failedFiles: (group.results || []).filter(item => item.status === 'failed').length,
+      progress: 0,
+    })),
+  );
+  const summaries = groups
+    .map(group => group.summary?.trim())
+    .filter(Boolean) as string[];
+  const questions = uniqueStrings(groups.flatMap(group => group.questions || []));
+  const results = groups.flatMap(group => group.results || []);
+
+  return {
+    groupId,
+    status: progress.status,
+    totalFiles: progress.totalFiles,
+    completedFiles: progress.completedFiles,
+    summary: summaries.length ? summaries.join('\n\n') : undefined,
+    questions,
+    results: results.map((item, index) => ({...item, fileIndex: index + 1})),
+  };
 }
 
 /** 创建批量任务：POST /app/audio/batch。 */
