@@ -48,34 +48,62 @@ export function fragmentToCard(f: MemoryFragment): MemoryCard {
   const audioFiles = files.filter(m => m.mime_type?.startsWith('audio'));
   const images = imageFiles.map(m => m.url);
 
-  // 时间流：AI 概要 → 文本节点（默认「高光」视图）；图片 files → 图片节点、录音 files → 音频节点
-  // （「全量」视图里图片直接铺图、录音可播放），转写/描述放在 content，仿原型 renderTimelineNode。
   const timeline = f.timeline || [];
-  const records: TimelineRecord[] = timeline.map((t, i) => ({
-    id: i,
-    time: t.time,
-    type: 'text',
-    content: t.content,
-  }));
-  // files 无独立时间，按序等比锚定到概要时间点，保证「全量」视图里大致按时序排列。
+  const fileById = new Map(files.map(file => [file.id, file]));
+  const referencedIds = new Set<string>();
+  const records: TimelineRecord[] = timeline.map((t, i) => {
+    const type: NonNullable<TimelineRecord['type']> =
+      t.type && ['text', 'image', 'video', 'audio', 'doc'].includes(t.type)
+        ? t.type
+        : 'text';
+    const mediaIds = t.media_ids || [];
+    mediaIds.forEach(id => referencedIds.add(id));
+    const media = mediaIds.map(id => fileById.get(id)).filter(Boolean) as MemoryFragment['files'];
+    const first = media[0];
+    const record: TimelineRecord = {
+      id: i,
+      time: t.time,
+      type,
+      content: t.content,
+      timelineTarget: {index: i, time: t.time, type, content: t.content, mediaIds},
+    };
+    if (type === 'image') {
+      record.images = media.map(item => item.url);
+      record.url = record.images[0];
+    } else if (type === 'audio' && first) {
+      record.url = first.url;
+      record.name = first.file_name || `语音记录 ${i + 1}`;
+      record.duration = durationFromMeta(first.meta);
+    } else if (type === 'video' && first) {
+      record.url = first.url;
+      record.name = first.file_name || undefined;
+    } else if (type === 'doc' && first) {
+      record.doc = {name: first.file_name || '附件'};
+    }
+    return record;
+  });
+
+  // 未被 timeline.media_ids 引用的旧媒体仍展示，但它们不是可编辑 timeline 对象。
+  const unreferencedImages = imageFiles.filter(file => !referencedIds.has(file.id));
+  const unreferencedAudio = audioFiles.filter(file => !referencedIds.has(file.id));
   const anchorTime = (i: number, count: number) =>
     timeline.length
       ? timeline[Math.min(timeline.length - 1, Math.floor((i * timeline.length) / count))].time
       : shortTime(f.start_time);
-  imageFiles.forEach((m, i) => {
+  unreferencedImages.forEach((m, i) => {
     records.push({
       id: timeline.length + i,
-      time: anchorTime(i, imageFiles.length),
+      time: anchorTime(i, unreferencedImages.length),
       type: 'image',
       url: m.url,
       content: m.description || undefined,
       name: m.file_name || undefined,
     });
   });
-  audioFiles.forEach((m, i) => {
+  unreferencedAudio.forEach((m, i) => {
     records.push({
-      id: timeline.length + imageFiles.length + i,
-      time: anchorTime(i, audioFiles.length),
+      id: timeline.length + unreferencedImages.length + i,
+      time: anchorTime(i, unreferencedAudio.length),
       type: 'audio',
       name: `语音记录 ${i + 1}`,
       content: m.description || undefined,
@@ -89,6 +117,7 @@ export function fragmentToCard(f: MemoryFragment): MemoryCard {
     id: f.id,
     // 唯一赋 fragmentId 的地方：只有真碎片才可作为修正锚点。合成卡/mock 卡一律不带。
     fragmentId: f.id,
+    fragmentUpdateTime: f.update_time,
     type: 'memory',
     tag: f.keywords?.[0] || '记忆',
     time: formatFragmentTime(f.start_time),

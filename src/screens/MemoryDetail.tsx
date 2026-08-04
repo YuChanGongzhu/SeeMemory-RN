@@ -117,6 +117,11 @@ export function MemoryDetail() {
   const togglePlay = (url: string) => {
     player.toggle(url, url).catch(() => flash('无法播放该录音'));
   };
+  const timelineWritable = writable && !!card.fragmentUpdateTime;
+  const editTimelineRecord = (node: TimelineRecord) => {
+    if (!timelineWritable || !node.timelineTarget) return;
+    gate(() => nav.push('editor', {mode: 'timeline', card, timelineRecord: node}));
+  };
   const share = (action: string) => {
     setShowShare(false);
     if (action === 'wechat') flash('✓ 正在拉起微信小程序...');
@@ -199,7 +204,12 @@ export function MemoryDetail() {
         {/* Timeline */}
         {card.timelineRecords?.length ? (
           <View>
-            <Text style={styles.tlLabel}>溯源时间流</Text>
+            <View style={styles.tlLabelRow}>
+              <Text style={styles.tlLabel}>溯源时间流</Text>
+              {timelineWritable && card.timelineRecords.some(node => node.timelineTarget)
+                ? <Text style={styles.tlEditHint}>长按记录可编辑</Text>
+                : null}
+            </View>
 
             {hasAppended ? (
               <View style={styles.segTabs}>
@@ -245,6 +255,9 @@ export function MemoryDetail() {
                             node={node}
                             playing={!!node.url && player.playingId === node.url}
                             onTogglePlay={togglePlay}
+                            onLongPress={timelineWritable && node.timelineTarget
+                              ? () => editTimelineRecord(node)
+                              : undefined}
                             playbackTime={player.playingId === node.url ? player.currentTime : undefined}
                             playbackDuration={player.playingId === node.url ? player.duration : undefined}
                           />
@@ -274,6 +287,9 @@ export function MemoryDetail() {
                             node={node}
                             playing={!!node.url && player.playingId === node.url}
                             onTogglePlay={togglePlay}
+                            onLongPress={timelineWritable && node.timelineTarget
+                              ? () => editTimelineRecord(node)
+                              : undefined}
                             playbackTime={player.playingId === node.url ? player.currentTime : undefined}
                             playbackDuration={player.playingId === node.url ? player.duration : undefined}
                           />
@@ -382,7 +398,9 @@ const styles = StyleSheet.create({
   aiTag: {backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20},
   aiTagText: {color: '#fff', fontSize: 12, fontWeight: '600'},
   text: {fontSize: 16, lineHeight: 29, color: colors.textMain, marginBottom: 40},
-  tlLabel: {fontSize: 13, fontWeight: '700', color: colors.textSub, letterSpacing: 1, marginBottom: 16},
+  tlLabelRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16},
+  tlLabel: {fontSize: 13, fontWeight: '700', color: colors.textSub, letterSpacing: 1},
+  tlEditHint: {fontSize: 12, fontWeight: '500', color: colors.textTertiary},
   segTabs: {flexDirection: 'row', backgroundColor: colors.bgSecondary, borderRadius: 10, padding: 3, marginBottom: 20},
   segTab: {flex: 1, paddingVertical: 6, borderRadius: 8, alignItems: 'center'},
   segTabOn: {backgroundColor: '#fff', ...shadow.soft},

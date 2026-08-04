@@ -60,7 +60,22 @@ export interface SubmitCorrectionParams {
   requestId: string;
 }
 
+export interface SubmitTimelineCorrectionParams {
+  fragmentId: string;
+  expectedUpdateTime: string;
+  target: {
+    index: number;
+    time: string;
+    type: 'audio' | 'video' | 'image' | 'text' | 'doc';
+    content: string;
+    mediaIds: string[];
+  };
+  correctedText: string;
+  requestId: string;
+}
+
 export const INSTRUCTION_MAX_LEN = 500;
+export const TIMELINE_EDIT_MAX_LEN = 500;
 
 /** 幂等键：每次提交调一次。防的是同一次提交的连点重发，不是跨提交复用。 */
 export function newCorrectionRequestId(anchorId: string): string {
@@ -128,6 +143,34 @@ export function submitMemoryCorrection(params: SubmitCorrectionParams): Promise<
       timeout: 60000,
     }),
     '提交修正失败',
+  );
+}
+
+/** Timeline 明确节点的结构化修正入口，不经过 Agent 或自然语言蒸馏。 */
+export function submitTimelineMemoryCorrection(
+  params: SubmitTimelineCorrectionParams,
+): Promise<MemoryCorrection> {
+  assertAiConsentGranted();
+  return withErrorMessage(
+    baseRequest<MemoryCorrection>({
+      method: 'POST',
+      path: '/app/memory/corrections/timeline',
+      body: {
+        fragment_id: params.fragmentId,
+        expected_update_time: params.expectedUpdateTime,
+        target: {
+          index: params.target.index,
+          time: params.target.time,
+          type: params.target.type,
+          content: params.target.content,
+          media_ids: params.target.mediaIds,
+        },
+        corrected_text: params.correctedText,
+        request_id: params.requestId,
+      },
+      timeout: 60000,
+    }),
+    '提交时间流修正失败',
   );
 }
 
