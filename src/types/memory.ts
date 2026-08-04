@@ -1,4 +1,4 @@
-/** Data model for the SiMemory feed — shaped after the app-prototype mocks. */
+/** Data model for the Remmy feed — shaped after the app-prototype mocks. */
 
 export interface LinkPreview {
   title: string;

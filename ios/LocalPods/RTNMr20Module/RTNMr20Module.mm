@@ -35,6 +35,20 @@ RCT_EXTERN_METHOD(writeNoResponse:(NSString *)serviceUUID
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(writeWithResponse:(NSString *)serviceUUID
+                  characteristicUUID:(NSString *)characteristicUUID
+                  base64Value:(NSString *)base64Value
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(characteristicInfo:(NSString *)serviceUUID
+                  characteristicUUID:(NSString *)characteristicUUID
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(maxWriteLength:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(monitor:(NSString *)serviceUUID
                   characteristicUUID:(NSString *)characteristicUUID
                   resolve:(RCTPromiseResolveBlock)resolve
@@ -66,6 +80,9 @@ RCT_EXTERN_METHOD(wifiJoin:(NSString *)ssid
 RCT_EXTERN_METHOD(wifiLeave:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(wifiDiagnostics:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(wifiConnect:(NSString *)host
                   port:(double)port
                   transferId:(NSString *)transferId
@@ -80,6 +97,17 @@ RCT_EXTERN_METHOD(wifiReceiveFile:(NSString *)relativePath
 
 RCT_EXTERN_METHOD(wifiAbort:(NSString *)transferId
                   resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(otaSendFrames:(NSString *)serviceUUID
+                  characteristicUUID:(NSString *)characteristicUUID
+                  base64Bin:(NSString *)base64Bin
+                  frameSize:(double)frameSize
+                  periodMs:(double)periodMs
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(otaAbort:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 @end

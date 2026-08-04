@@ -140,9 +140,11 @@ export function HardwarePage() {
     inbox,
     processingIds,
     error,
+    hasPaired,
     startScan,
     stopScan,
     connectAndPair,
+    reconnectSaved,
     disconnect,
     syncNow,
     syncSelected,
@@ -177,12 +179,20 @@ export function HardwarePage() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [settling, setSettling] = useState(false); // 连上后 2s 稳定期（期间显示缓冲，不发命令）
   const [pendingName, setPendingName] = useState(''); // 正在连接的设备名（覆盖层展示）
+  // 「重新连接」进行中：静默重连已知设备，不弹全屏配对覆盖层——否则会盖住离线态下
+  // 正在浏览/播放的本地录音，还会把只该自动连的已配对设备变成一次设备选择。
+  const [silentReconnect, setSilentReconnect] = useState(false);
   // 历史（旧全局、不绑账号）本地录音的迁移入口：{migrated, count}；仅在未迁移且有条数时提示。
   const [migrateInfo, setMigrateInfo] = useState<{migrated: boolean; count: number} | null>(null);
   const [migrating, setMigrating] = useState(false);
 
   const connected = connState === 'connected';
   const busy = connState === 'scanning' || connState === 'connecting' || connState === 'pairing';
+  // 营销首屏只留给「真·新用户」：没配过设备且本地一条录音都没有。
+  // 配过设备（或手里有本地录音）的用户即使当前没连上，也要进 dashboard——
+  // 「我的录音」是纯本地数据（AsyncStorage + Documents），离线完全可播可上传转写，
+  // 不该被连接状态挡在门外。
+  const showHero = !connected && !hasPaired && inbox.length === 0;
   const autoDlRef = useRef(false);
   // 自动转文字重入闩：busy 防并发触发；key 记住「上一批已自动提交过的 synced 集合」，
   // 使同一批只自动触发一次——即便用户在同意弹窗里取消（条目仍为 synced）也不会反复弹窗。
@@ -368,11 +378,38 @@ export function HardwarePage() {
     }
   }, [wifiPhase, subPage]);
 
+  // 扫描配对：走全屏覆盖层的设备选择流程（换设备/连别的记忆粒都走这里）。
+  // 必须显式复位 silentReconnect——否则上一次静默重连若在扫描起来前就失败返回
+  //（蓝牙关着、没配对记录…），闩会一直挂着，把这次手动扫描的设备列表也一起吞掉。
   const pair = useCallback(() => {
+    setSilentReconnect(false);
     setPendingName('');
     clearError();
     startScan().catch(() => undefined);
   }, [startScan, clearError]);
+
+  // 离线卡片上的主按钮：配过设备就静默重连（force 绕过「每会话只自动重连一次」的门控），
+  // 没配过才走扫描配对。
+  const reconnect = useCallback(() => {
+    clearError();
+    if (hasPaired) {
+      // reconnectSaved 的 promise 在扫描起来时就 resolve（连接还在后台跑），
+      // 所以退出条件不看它，交给下面的 busy effect 复位。
+      setSilentReconnect(true);
+      reconnectSaved(true).catch(() => undefined);
+      return;
+    }
+    setSilentReconnect(false);
+    setPendingName('');
+    startScan().catch(() => undefined);
+  }, [hasPaired, reconnectSaved, startScan, clearError]);
+
+  // 静默重连结束（连上、超时回 idle 或被打断）后复位，让后续手动配对仍能看到覆盖层。
+  useEffect(() => {
+    if (!busy) {
+      setSilentReconnect(false);
+    }
+  }, [busy]);
 
   const cancelPairing = useCallback(() => {
     stopScan();
@@ -800,8 +837,8 @@ export function HardwarePage() {
         </View>
       ) : null}
 
-      {!connected ? (
-        /* ---- 未配对 ---- */
+      {showHero ? (
+        /* ---- 未配对且无本地录音 ---- */
         <ScrollView contentContainerStyle={st.unpairedBody} showsVerticalScrollIndicator={false}>
           <Image source={images.device} style={st.hero} resizeMode="contain" />
           <Text style={st.brand}>SEEMEMORY</Text>
@@ -823,24 +860,60 @@ export function HardwarePage() {
           </TouchableOpacity>
         </ScrollView>
       ) : (
-        /* ---- 已配对 dashboard ---- */
+        /* ---- 已配对 dashboard（未连接时为离线态：设备数据隐藏，本地录音照常） ---- */
         <ScrollView contentContainerStyle={st.pairedBody} showsVerticalScrollIndicator={false}>
           <View style={st.dashCard}>
             <GradientBg radius={radius.bigCard} from={colors.darkCard} to="#2C2C2E" />
             {/* Row1 设备 + 连接状态 */}
             <View style={st.dashRow1}>
               <View style={st.devIconWrap}>
-                <Bluetooth size={20} color="#fff" />
+                <Bluetooth size={20} color={connected ? '#fff' : 'rgba(255,255,255,0.45)'} />
               </View>
               <Text style={st.devName} numberOfLines={1}>{deviceName}</Text>
-              <View style={st.connBadge}>
-                <View style={st.connDot} />
-                <Text style={st.connBadgeText}>蓝牙已连接</Text>
-              </View>
+              {connected ? (
+                <View style={st.connBadge}>
+                  <View style={st.connDot} />
+                  <Text style={st.connBadgeText}>蓝牙已连接</Text>
+                </View>
+              ) : (
+                <View style={st.offBadge}>
+                  <View style={st.offDot} />
+                  <Text style={st.offBadgeText}>未连接</Text>
+                </View>
+              )}
             </View>
 
             {/* Row2 录音状态 */}
-            {recording ? (
+            {!connected ? (
+              /* 离线：只给状态 + 重连入口；电量/存储在下面一并隐藏 */
+              <>
+                <View style={st.idleBanner}>
+                  <View style={st.idleDot} />
+                  <Text style={st.idleText}>
+                    {inbox.length
+                      ? `设备未连接 · 本地 ${inbox.length} 段录音可直接播放`
+                      : '设备未连接 · 连接后可同步设备里的录音'}
+                  </Text>
+                </View>
+                <TouchableOpacity style={st.reconnectBtn} onPress={reconnect} disabled={busy}>
+                  {busy ? (
+                    <View style={st.reconnectBusy}>
+                      <ActivityIndicator size="small" color="#fff" />
+                      <Text style={st.reconnectBtnText}>正在连接…</Text>
+                    </View>
+                  ) : (
+                    <Text style={st.reconnectBtnText}>{hasPaired ? '重新连接' : '连接设备'}</Text>
+                  )}
+                </TouchableOpacity>
+                {/* 「重新连接」只连已保存的那台，换设备/连别的记忆粒必须还有扫描入口。
+                    未配对时上面的主按钮本身就是扫描，不再重复。 */}
+                {hasPaired && !busy ? (
+                  <TouchableOpacity style={st.scanOtherBtn} onPress={pair}>
+                    <Text style={st.scanOtherText}>搜索并连接其他设备</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
+            ) : recording ? (
               <View style={st.recBanner}>
                 <View style={st.recBannerDot} />
                 <Text style={st.recBannerText}>正在录音 · 已录制 {fmtDuration(recording.seconds)}</Text>
@@ -859,38 +932,41 @@ export function HardwarePage() {
               </View>
             )}
 
-            {/* Row3 电量/存储 */}
-            <View style={st.statGrid}>
-              <View style={[st.statCard, lowBattery && st.statCardWarn]}>
-                <Text style={[st.statBig, lowBattery && {color: HW.red}]}>
-                  {battery != null ? `${battery}%` : '—'}
-                </Text>
-                <Text style={[st.statSub, lowBattery && {color: HW.red}]}>
-                  {lowBattery ? '电量不足，请充电' : '剩余电量'}
-                </Text>
+            {/* Row3 电量/存储：仅连接时展示——断开后 status 里还是上次连上时的旧值，
+                摆着比不摆更误导。 */}
+            {connected ? (
+              <View style={st.statGrid}>
+                <View style={[st.statCard, lowBattery && st.statCardWarn]}>
+                  <Text style={[st.statBig, lowBattery && {color: HW.red}]}>
+                    {battery != null ? `${battery}%` : '—'}
+                  </Text>
+                  <Text style={[st.statSub, lowBattery && {color: HW.red}]}>
+                    {lowBattery ? '电量不足，请充电' : '剩余电量'}
+                  </Text>
+                </View>
+                <View style={[st.statCard, storageWarn && st.statCardWarn]}>
+                  <Text style={[st.statBig, storageWarn && {color: HW.red}]}>
+                    {freeGb != null ? (
+                      <>
+                        <Text style={st.statBigUnit}>剩余 </Text>
+                        {freeGb}
+                        <Text style={st.statBigUnit}>GB {freeMbRem}MB</Text>
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                  </Text>
+                  {totalMb ? (
+                    <View style={st.storageBar}>
+                      <View style={[st.storageFill, {width: `${usedRatio * 100}%`, backgroundColor: storageWarn ? HW.red : HW.blue}]} />
+                    </View>
+                  ) : null}
+                  <Text style={[st.statSub, storageWarn && {color: HW.red}]}>
+                    {storageWarn ? '存储空间即将用完' : '可用存储'}
+                  </Text>
+                </View>
               </View>
-              <View style={[st.statCard, storageWarn && st.statCardWarn]}>
-                <Text style={[st.statBig, storageWarn && {color: HW.red}]}>
-                  {freeGb != null ? (
-                    <>
-                      <Text style={st.statBigUnit}>剩余 </Text>
-                      {freeGb}
-                      <Text style={st.statBigUnit}>GB {freeMbRem}MB</Text>
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </Text>
-                {totalMb ? (
-                  <View style={st.storageBar}>
-                    <View style={[st.storageFill, {width: `${usedRatio * 100}%`, backgroundColor: storageWarn ? HW.red : HW.blue}]} />
-                  </View>
-                ) : null}
-                <Text style={[st.statSub, storageWarn && {color: HW.red}]}>
-                  {storageWarn ? '存储空间即将用完' : '可用存储'}
-                </Text>
-              </View>
-            </View>
+            ) : null}
           </View>
 
           {/* 自动化两格：自动同步 + 自动转文字（独立开关，整格可点） */}
@@ -930,13 +1006,20 @@ export function HardwarePage() {
           {/* 录音列表 */}
           <View style={st.listHead}>
             <Text style={st.listTitle}>我的录音</Text>
-            <TouchableOpacity style={st.downloadAll} onPress={() => setSubPage('deviceFiles')}>
-              <Text style={st.downloadAllText}>设备文件</Text>
-            </TouchableOpacity>
+            {/* 设备文件页要发 BLE 列目录命令，没连上进去只有一句提示——离线时不给这个死胡同入口 */}
+            {connected ? (
+              <TouchableOpacity style={st.downloadAll} onPress={() => setSubPage('deviceFiles')}>
+                <Text style={st.downloadAllText}>设备文件</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           {inbox.length === 0 ? (
-            <Text style={st.empty}>暂无录音。点「查看全部」从记忆粒同步。</Text>
+            <Text style={st.empty}>
+              {connected
+                ? '暂无录音。点「设备文件」从记忆粒同步。'
+                : '暂无本地录音。连接记忆粒后可把设备里的录音同步到这里。'}
+            </Text>
           ) : (
             <View style={{gap: 12}}>
               {groups.map(group => (
@@ -958,7 +1041,7 @@ export function HardwarePage() {
       )}
 
       {/* 配对覆盖层：扫描 / 配置 / 成功 */}
-      {(busy || showSuccess) && !error ? (
+      {(busy || showSuccess) && !error && !silentReconnect ? (
         <View style={st.overlay}>
           {showSuccess ? (
             <>
@@ -1169,6 +1252,15 @@ const st = StyleSheet.create({
   connBadge: {flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, backgroundColor: 'rgba(52,199,89,0.1)'},
   connDot: {width: 6, height: 6, borderRadius: 3, backgroundColor: HW.green},
   connBadgeText: {fontSize: 12, color: HW.green, fontWeight: '500'},
+  // 离线态徽标：与 connBadge 同形，改中性灰——未连接是常态，不用红色报警
+  offBadge: {flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.08)'},
+  offDot: {width: 6, height: 6, borderRadius: 3, backgroundColor: HW.textSub},
+  offBadgeText: {fontSize: 12, color: '#D1D1D6', fontWeight: '500'},
+  reconnectBtn: {height: 48, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center'},
+  reconnectBtnText: {fontSize: 15, color: '#fff', fontWeight: '600'},
+  reconnectBusy: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  scanOtherBtn: {alignItems: 'center', paddingVertical: 12, marginTop: 4},
+  scanOtherText: {fontSize: 14, color: '#8AB4F8', fontWeight: '600'},
   recBanner: {flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: 'rgba(52,199,89,0.15)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(52,199,89,0.3)', borderRadius: 16, padding: 16, marginBottom: 16},
   recBannerDot: {width: 10, height: 10, borderRadius: 5, backgroundColor: HW.red},
   recBannerText: {fontSize: 15, color: HW.green, fontWeight: '600'},

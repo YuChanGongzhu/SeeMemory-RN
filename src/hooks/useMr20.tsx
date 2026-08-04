@@ -20,16 +20,31 @@ import {
   Mr20Status,
 } from '../native/mr20/Mr20Client';
 import {isMr20NativeAvailable, isMr20WifiAvailable} from '../native/mr20/Mr20Native';
-import {MR20_PAIR_KEY} from '../native/mr20/protocol';
+import {
+  MR20_KEY_LEN,
+  MR20_PAIR_KEY,
+  isValidDeviceKey,
+  toDeviceKey,
+} from '../native/mr20/protocol';
+import {
+  runHotspotJoinTest,
+  runWifiSetupDiagnostic,
+  WifiDiagReport,
+} from '../services/mr20WifiDiagnose';
 import {
   clearBatchGroupId,
   clearPairedDevice,
   clearSyncedSet,
+  clearWifiPassword,
+  clearWifiProvisionedKey,
   getBatchGroupId,
   getSyncedSet,
   getPairedDevice,
+  getWifiPassword,
   savePairedDevice,
   saveBatchGroupId,
+  saveWifiPassword,
+  saveWifiProvisionedKey,
 } from '../services/mr20Storage';
 import {
   applyBatchResult,
@@ -66,6 +81,7 @@ import {
 import {
   connectWifi,
   disconnectWifi,
+  rejoinWifiWithPassword,
   wifiSyncFiles,
   WifiConnectStep,
   WifiStepState,
@@ -122,7 +138,11 @@ interface Mr20ContextType {
   wifiPhase: WifiPhase;
   wifiSteps: Record<WifiConnectStep, WifiStepState>;
   wifiProgress: WifiTransferProgress | null;
-  wifiCred: {ssid: string; pwd: string} | null; // 手动连接引导用
+  /**
+   * 手动连接引导用。`pwd` 是我们实际拿去入网的那个值；`reported` 是**设备自报**的
+   * （热点开启后读的 `GJJY_BLE&WIFI`）——密码本来就能从设备查出来，失败时要露给用户看的是它。
+   */
+  wifiCred: {ssid: string; pwd: string; reported: string} | null;
   wifiSummary: WifiTransferSummary | null;
   // 设备上当前的录音文件统计（总数 / 待同步 / 字节）
   deviceFiles: Mr20DeviceFiles | null;
@@ -157,9 +177,40 @@ interface Mr20ContextType {
   // WiFi 热点管理（WifiManage 页用）：开/关热点、读当前 SSID/密码/状态、改名改密。
   openHotspot: () => Promise<void>;
   closeHotspot: () => Promise<void>;
-  getHotspotInfo: () => Promise<{ssid: string; pwd: string; state: number} | null>;
-  // 修改热点 SSID/密码（WIFI&CH，改后设备会复位）。
-  changeHotspot: (ssid: string, pwd: string) => Promise<void>;
+  getHotspotInfo: () => Promise<{
+    ssid: string;
+    pwd: string;
+    state: number;
+    /** 用户在 App 里设过的密码；null 表示还没设过，pwd 是设备回的值。 */
+    savedPwd: string | null;
+    /**
+     * `pwd` 这个值是谁给的：`device` = 设备自报，`local` = 设备没回、用的手机本地兜底。
+     * 两个来源可能给出同一串字符，分不清来源就分不清「设备还是出厂态」和「设备没回话」。
+     */
+    pwdFrom: 'device' | 'local' | null;
+  } | null>;
+  // 初始化/重设热点密码：SK&<8位> + WIFI&CH（无参）。热点密码就是 SK 绑定密钥。
+  // 会改变设备绑定状态：设备已被别的密钥绑定时抛 SK&ERR 错误，需先 resetHotspotKey。
+  initHotspotPassword: (pwd: string) => Promise<void>;
+  // 只存本地（用户已知道密码时用），不下发指令、零风险。
+  saveHotspotPassword: (pwd: string) => Promise<void>;
+  // 重置设备绑定密钥（SK&RESET）。设备会当场断开 BLE。
+  resetHotspotKey: () => Promise<void>;
+  // 配网自检：按协议 0801 完整走一遍链路，逐步回调日志行。约需 1 分钟。
+  // resetFirst：先发 SK&RESET 清掉旧密钥并自动重连，再走 SK → WIFI&CH（不格式化磁盘）。
+  diagnoseWifiSetup: (
+    key: string,
+    onLine?: (line: string) => void,
+    opts?: {resetFirst?: boolean},
+  ) => Promise<WifiDiagReport>;
+  /**
+   * 只验一个密码能不能连上设备热点：开热点 → 读 WIFI → 用这个密码入网 → 建 socket。
+   * **一条写指令都不发**，不改设备任何配置。约 10~30 秒。
+   */
+  testHotspotJoin: (
+    pwd: string,
+    onLine?: (line: string) => void,
+  ) => Promise<WifiDiagReport>;
   // WiFi 快传：传入用户勾选的文件子集，自动走「开热点→入网→逐个收流→入库」。
   startWifiTransfer: (files: Mr20File[]) => Promise<void>;
   // WiFi 快传「全部待同步」（首页一键快传用）：内部列出未同步文件后走 startWifiTransfer。
@@ -168,6 +219,11 @@ interface Mr20ContextType {
   switchToWifiTransfer: () => Promise<void>;
   // 自动入网失败后，用户已手动连上热点，点此继续传输。
   continueWifiAfterManualJoin: () => Promise<void>;
+  /**
+   * 自动入网失败时，用用户手输的热点密码重试（会先把热点重新开一遍再连）。
+   * 成功则存为本地密码并接着传；失败留在 manual 态，允许当场改一位再试。
+   */
+  retryWifiJoinWithPassword: (pwd: string) => Promise<void>;
   cancelWifiTransfer: () => void;
   resetWifiTransfer: () => void;
   refreshDeviceFiles: () => Promise<void>;
@@ -185,7 +241,16 @@ interface Mr20ContextType {
   // 读取设备当前时间（GT），返回原始 14 位串 yyyymmddhhmmss；读不到为空串。
   getDeviceTime: () => Promise<string>;
   // MCU OTA 升级：传入固件字节，流式发送并回调进度（sent/total 字节）。
-  runOtaMcu: (bin: Uint8Array, onProgress?: (sent: number, total: number) => void) => Promise<void>;
+  runOtaMcu: (
+    bin: Uint8Array,
+    onProgress?: (sent: number, total: number) => void,
+  ) => Promise<void>;
+  // WiFi 模组 OTA 升级。传输过程与 MCU 相同，但 onProgress 走完 100% 之后还要等
+  // 模组把固件烧进去（协议 R62 第 4 步），这段没有进度、只能等，界面别按 100% 就收工。
+  runOtaWifi: (
+    bin: Uint8Array,
+    onProgress?: (sent: number, total: number) => void,
+  ) => Promise<void>;
   forgetDevice: () => Promise<void>;
   factoryReset: () => Promise<void>;
   clearError: () => void;
@@ -206,7 +271,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   deletingDevice: false,
   deleteProgress: null,
   wifiPhase: 'idle',
-  wifiSteps: {open: 'pending', join: 'pending', reachable: 'pending'},
+  wifiSteps: {provision: 'pending', open: 'pending', join: 'pending', reachable: 'pending'},
   wifiProgress: null,
   wifiCred: null,
   wifiSummary: null,
@@ -232,11 +297,28 @@ const Mr20Context = createContext<Mr20ContextType>({
   openHotspot: noop,
   closeHotspot: noop,
   getHotspotInfo: async () => null,
-  changeHotspot: noop,
+  initHotspotPassword: noop,
+  saveHotspotPassword: noop,
+  resetHotspotKey: noop,
+  diagnoseWifiSetup: async () => ({
+    lines: [],
+    verdict: '未连接设备',
+    ok: false,
+    ssid: '',
+    pwd: '',
+  }),
+  testHotspotJoin: async () => ({
+    lines: [],
+    verdict: '未连接设备',
+    ok: false,
+    ssid: '',
+    pwd: '',
+  }),
   startWifiTransfer: noop,
   startWifiTransferPending: noop,
   switchToWifiTransfer: noop,
   continueWifiAfterManualJoin: noop,
+  retryWifiJoinWithPassword: noop,
   cancelWifiTransfer: () => {},
   resetWifiTransfer: () => {},
   refreshDeviceFiles: noop,
@@ -253,6 +335,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   syncTime: noop,
   getDeviceTime: async () => '',
   runOtaMcu: noop,
+  runOtaWifi: noop,
   forgetDevice: noop,
   factoryReset: noop,
   clearError: () => {},
@@ -269,8 +352,28 @@ const MAX_LOGS = 200;
  * - 超时：设备没开机 / 太远 / 不在范围。
  */
 async function authenticateOrGuide(client: Mr20Client): Promise<void> {
+  // 候选密钥：**用户自己设过的排第一**，内置的 MR20_PAIR_KEY 兜底。
+  // 用户在「配网自检 / 初始化热点密码」里设的密钥同时也是 SK 绑定密钥（协议 0801），
+  // 若该固件开着密钥校验，重连时只发内置密钥必然 SK&ERR —— 等于用户一改密码就再也连不上。
+  const saved = await getWifiPassword().catch(() => null);
+  const candidates = [saved, MR20_PAIR_KEY].filter(
+    (k, i, a): k is string => Boolean(k) && a.indexOf(k) === i,
+  );
   try {
-    await client.authenticate(MR20_PAIR_KEY);
+    let lastErr: unknown = null;
+    for (const key of candidates) {
+      try {
+        await client.authenticate(key);
+        return;
+      } catch (e) {
+        lastErr = e;
+        // SK&ERR 才值得换下一把；超时/断链换密钥也没用，直接冒泡。
+        if (String((e as Error)?.message || e) !== 'SK_ERR') {
+          throw e;
+        }
+      }
+    }
+    throw lastErr;
   } catch (e) {
     const msg = String((e as Error)?.message || e);
     if (msg === 'SK_ERR') {
@@ -301,12 +404,17 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const [deleteProgress, setDeleteProgress] = useState<DeleteProgress | null>(null);
   const [wifiPhase, setWifiPhase] = useState<WifiPhase>('idle');
   const [wifiSteps, setWifiSteps] = useState<Record<WifiConnectStep, WifiStepState>>({
+    provision: 'pending',
     open: 'pending',
     join: 'pending',
     reachable: 'pending',
   });
   const [wifiProgress, setWifiProgress] = useState<WifiTransferProgress | null>(null);
-  const [wifiCred, setWifiCred] = useState<{ssid: string; pwd: string} | null>(null);
+  const [wifiCred, setWifiCred] = useState<{
+    ssid: string;
+    pwd: string;
+    reported: string;
+  } | null>(null);
   const [wifiSummary, setWifiSummary] = useState<WifiTransferSummary | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<Mr20DeviceFiles | null>(null);
   const [inbox, setInbox] = useState<Mr20InboxItem[]>([]);
@@ -470,7 +578,9 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           await authenticateOrGuide(client);
         }
 
-        await savePairedDevice({id: deviceId, name, key: MR20_PAIR_KEY});
+        // 记的密钥同样以用户设过的为准，与 authenticateOrGuide 的候选顺序保持一致。
+        const usedKey = (await getWifiPassword().catch(() => null)) || MR20_PAIR_KEY;
+        await savePairedDevice({id: deviceId, name, key: usedKey});
         setHasPaired(true);
         client.syncTime().catch(() => undefined);
       } catch (e) {
@@ -689,28 +799,131 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
     const state = await client.getWifiState().catch(() => 0);
     const cred = await client.getWifiCredentials().catch(() => ({ssid: '', pwd: ''}));
-    return {ssid: cred.ssid, pwd: cred.pwd, state};
+    // 展示的密码以**设备自报的**为准：协议注明「PWD:WIFI 密码」。本地保存的只在设备报空时
+    // 兜底——否则界面会显示一个连不上的密码，用户照着手输还是连不上。
+    //
+    // `pwdFrom` 不是锦上添花，是排查刚需：两个来源都可能给出同一个 `SeeMemor`
+    // （设备 MCU 里存的出厂值 / 我们本地兜底的 `DEVICE_WIFI_DEFAULT_PWD`），
+    // 界面上却长得一模一样。分不清来源时，「密码一直是 SeeMemor」既可能说明设备真的还是
+    // 出厂状态，也可能说明设备**根本没回话**、屏幕上是我们自己填的值——两者的下一步完全不同。
+    const saved = await getWifiPassword().catch(() => null);
+    return {
+      ssid: cred.ssid,
+      pwd: cred.pwd || saved || '',
+      state,
+      savedPwd: saved,
+      pwdFrom: cred.pwd ? ('device' as const) : saved ? ('local' as const) : null,
+    };
   }, [connState]);
-  // 改名/改密：发 WIFI&CH 后轮询 WIFIS 确认（改后设备会复位）。
-  const changeHotspot = useCallback(
-    async (ssid: string, pwd: string) => {
+
+  /**
+   * 初始化/重设热点密码：`SK&<8位>` → `WIFI&CH`（无参）→ 轮询 WIFIS 到 6。
+   * 无论确认与否都把密码存本地——密钥在 SK&OK 那刻就已经写进设备了，丢了反而再也连不上。
+   */
+  const initHotspotPassword = useCallback(
+    async (pwd: string) => {
       const client = clientRef.current;
       if (!client || connState !== 'connected') {
         throw new Error('请先连接设备蓝牙');
       }
-      await client.changeWifiCredentials(ssid, pwd);
+      try {
+        const applied = await client.initWifiPassword(pwd);
+        await saveWifiPassword(applied);
+        // 这一次就是完整的 SK + WIFI&CH，记下来，快传主路径不必再跑一遍（要 10s）。
+        await saveWifiProvisionedKey(applied).catch(() => undefined);
+      } catch (e) {
+        // 「已设置但未确认」这条错误里密钥其实已生效，必须存下来；SK&ERR / 格式错则没动过设备。
+        // 但**不记「已初始化」**：没看到 4/6 就等于没有证据说明密码真刷进了 WiFi 模组，
+        // 让快传主路径再跑一次 WIFI&CH 才是对的。
+        const msg = String((e as Error)?.message || e);
+        if (msg.includes('密钥已设置成功')) {
+          await saveWifiPassword(toDeviceKey(pwd)).catch(() => undefined);
+        }
+        throw e;
+      }
+    },
+    [connState],
+  );
+
+  /** 只改本地保存的密码（用户已知道热点密码时用），不下发任何指令、零风险。 */
+  const saveHotspotPassword = useCallback(async (pwd: string) => {
+    await saveWifiPassword(pwd);
+  }, []);
+
+  /** 重置设备绑定密钥（SK&RESET）。设备会当场断开 BLE，本地保存的密码也一并清掉。 */
+  const resetHotspotKey = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      throw new Error('请先连接设备蓝牙');
+    }
+    await client.resetDeviceKey();
+    await clearWifiPassword().catch(() => undefined);
+    // 密钥都解绑了，「已完成配网初始化」自然作废——留着会让下次快传跳过 SK+WIFI&CH。
+    await clearWifiProvisionedKey().catch(() => undefined);
+  }, [connState]);
+
+  /**
+   * 配网自检：按协议完整走一遍并逐行回调日志，见 services/mr20WifiDiagnose。
+   * `opts.resetFirst` 会在最前面加一步 `SK&RESET`（重置绑定密钥 + 自动重连），
+   * 之后照旧 SK → WIFI&CH。**只重置密钥，不格式化磁盘**。
+   */
+  const diagnoseWifiSetup = useCallback(
+    async (
+      key: string,
+      onLine?: (line: string) => void,
+      opts: {resetFirst?: boolean} = {},
+    ) => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected') {
+        throw new Error('请先连接设备蓝牙');
+      }
+      if (opts.resetFirst) {
+        // 只作废「已完成初始化」标记，**不清本地密码**。
+        //
+        // 一度在这里把 wifiPwd 也清了，理由是「密钥都重置了，旧密码没意义」。那会开出一个
+        // 能把设备锁死的窗口：SK 把新密钥写进去了、WIFI&CH 那步却失败提前 return，此时设备
+        // 上有一把密钥而手机上一个都没有 —— 下次连接 authenticateOrGuide 只剩 MR20_PAIR_KEY
+        // 可试，必然 SK&ERR，而解绑用的 SK&RESET 在未鉴权时又可能被固件忽略。
+        // 旧密码留着最多是多试一个候选，代价小得多。
+        await clearWifiProvisionedKey().catch(() => undefined);
+      }
+      return runWifiSetupDiagnostic(client, key, onLine, opts);
+    },
+    [connState],
+  );
+
+  /**
+   * 单点验证一个密码。和 {@link diagnoseWifiSetup} 的区别是**只读**：不发 SK、不发 WIFI&CH，
+   * 不动设备上的任何配置，所以随便跑多少次都没有副作用。
+   */
+  const testHotspotJoin = useCallback(
+    async (pwd: string, onLine?: (line: string) => void) => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected') {
+        throw new Error('请先连接设备蓝牙');
+      }
+      return runHotspotJoinTest(client, pwd.trim(), onLine);
     },
     [connState],
   );
 
   // 传输循环（连接就绪后调用）：逐个 WiFi 收流落盘 → 登记入库 → 汇总。
+  // apReadyAt = 热点就绪时刻（connectWifi 返回）；wifiSyncFiles 据此判断建连失败是不是
+  // 撞上协议的 30s 空闲自动关，是就重发 WIFIO 起新一轮而不是白白重连。
   const runWifiTransferLoop = useCallback(
-    async (client: Mr20Client, files: Mr20File[]) => {
+    async (
+      client: Mr20Client,
+      files: Mr20File[],
+      apReadyAt?: number,
+      credentials?: {ssid: string; pwd: string},
+    ) => {
       setWifiPhase('transferring');
       setWifiSteps(prev => ({...prev, reachable: 'done'}));
       const results = await wifiSyncFiles(client, files, {
         onProgress: p => setWifiProgress(p),
         shouldCancel: () => wifiCancelRef.current,
+        apReadyAt,
+        credentials,
       });
       const ok = results.filter(r => !r.error);
       // 全部失败（且非用户主动取消）：多半是热点已关/未连上，报错让其重来，别误显示「成功」。
@@ -769,19 +982,22 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       wifiFilesRef.current = files;
       setWifiSummary(null);
       setWifiProgress({total: files.length, completed: 0});
-      setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+      setWifiSteps({provision: 'pending', open: 'pending', join: 'pending', reachable: 'pending'});
       setWifiPhase('connecting');
       try {
         const conn = await connectWifi(client, (step, state) =>
           setWifiSteps(prev => ({...prev, [step]: state})),
         );
-        setWifiCred({ssid: conn.ssid, pwd: conn.pwd});
+        setWifiCred({ssid: conn.ssid, pwd: conn.pwd, reported: conn.reported});
         if (!conn.joined) {
           // 自动入网被拒/失败 → 引导用户去系统设置手动连，再 continueWifiAfterManualJoin。
           setWifiPhase('manual');
           return;
         }
-        await runWifiTransferLoop(client, files);
+        await runWifiTransferLoop(client, files, conn.apReadyAt, {
+          ssid: conn.ssid,
+          pwd: conn.pwd,
+        });
       } catch (e) {
         setError(String((e as Error)?.message || e));
         setWifiPhase('error');
@@ -809,7 +1025,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     setError(null);
     setWifiSummary(null);
     setWifiProgress(null);
-    setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+    setWifiSteps({provision: 'pending', open: 'pending', join: 'pending', reachable: 'pending'});
     wifiCancelRef.current = false; // 清除上一次残留的取消标志
     setWifiPhase('connecting');
     let pending: Mr20File[] = [];
@@ -875,13 +1091,74 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     wifiCancelRef.current = false;
     setWifiSteps(prev => ({...prev, join: 'done'}));
     try {
-      await runWifiTransferLoop(client, files);
+      // 手动连接路径：用户去系统设置连热点这段时间基本必然超过协议的 30s 空闲窗口，
+      // 设备很可能已经把 AP 自动关了。传 0（视为已过期）让首次建连失败时直接重发 WIFIO
+      // 起新一轮，而不是对着已关闭的热点重连三次然后报「传输失败」。
+      await runWifiTransferLoop(client, files, 0);
     } catch (e) {
       setError(String((e as Error)?.message || e));
       setWifiPhase('error');
       disconnectWifi(client).catch(() => undefined);
     }
   }, [runWifiTransferLoop]);
+
+  /**
+   * 用**用户手输的密码**重试入网，成功就直接接着传。
+   *
+   * 自动入网的候选密码只有三个来源（设备自报 / 本地存过 / 出厂默认），设备上的真实密码不在
+   * 其中时，自动这条路重试多少次都是同一批错密码。把输入框摆在失败现场，比让用户跑一趟
+   * 系统设置强得多——去系统设置那一趟本身还必然超出协议的 30s 窗口。
+   */
+  const retryWifiJoinWithPassword = useCallback(
+    async (input: string) => {
+      const client = clientRef.current;
+      const files = wifiFilesRef.current;
+      const ssid = wifiCred?.ssid;
+      if (!client || !files.length || !ssid) {
+        return;
+      }
+      // **这里故意不套 isValidDeviceKey / toDeviceKey。**
+      //
+      // 那两个管的是「SK 绑定密钥必须是 8 位」，是我们对设备的假设；而走到手输这一步，
+      // 恰恰说明这个假设在这台设备上不成立（自动候选全是按它推出来的，全错）。escape hatch
+      // 还按同一个假设卡格式，就不成其为 escape hatch 了。
+      //
+      // 这个值直接交给 iOS 的 NEHotspotConfiguration，所以只按 WPA2 自己的规矩验：8~63 位。
+      const key = input.trim();
+      if (key.length < 8 || key.length > 63) {
+        setError('WiFi 密码需要 8~63 位（WPA2 的规定）。');
+        return;
+      }
+      if (!isValidDeviceKey(key)) {
+        // 不拦，只记一笔：和协议说的「${MR20_KEY_LEN} 位」不一样时，值得在日志里留个痕迹。
+        client.log(
+          `[wifi] 手输密码长度 ${key.length}，与协议说的 ${MR20_KEY_LEN} 位不符——照样试`,
+        );
+      }
+      setError(null);
+      wifiCancelRef.current = false;
+      setWifiPhase('connecting');
+      setWifiSteps(prev => ({...prev, open: 'active', join: 'active'}));
+      try {
+        const r = await rejoinWifiWithPassword(client, ssid, key);
+        setWifiCred({ssid, pwd: key, reported: wifiCred?.reported ?? ''});
+        if (!r.joined) {
+          // 回到手动页而不是错误页：用户多半只是输错了一位，应该能当场再试一次。
+          setWifiSteps(prev => ({...prev, open: 'done', join: 'failed'}));
+          setError(`用密码「${key}」还是连不上热点 ${ssid}，请确认密码后再试一次。`);
+          setWifiPhase('manual');
+          return;
+        }
+        setWifiSteps(prev => ({...prev, open: 'done', join: 'done'}));
+        await runWifiTransferLoop(client, files, r.apReadyAt, {ssid, pwd: key});
+      } catch (e) {
+        setError(String((e as Error)?.message || e));
+        setWifiPhase('error');
+        disconnectWifi(client).catch(() => undefined);
+      }
+    },
+    [runWifiTransferLoop, wifiCred],
+  );
 
   // 中断快传：置标志 + 关 socket 打断当前文件；已传完的保留在收件箱。退热点。
   const cancelWifiTransfer = useCallback(() => {
@@ -905,7 +1182,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     setWifiProgress(null);
     setWifiSummary(null);
     setWifiCred(null);
-    setWifiSteps({open: 'pending', join: 'pending', reachable: 'pending'});
+    setWifiSteps({provision: 'pending', open: 'pending', join: 'pending', reachable: 'pending'});
   }, []);
 
   // 批处理完成：拉结果，回填转写 + 总结 + 问题。
@@ -1297,7 +1574,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   // MCU OTA：置 otaActive 独占 BLE（暂停状态刷新/扫描/重连）→ 流式发送固件 → 收尾。
   // 成功后设备复位断连，随后自动重连的 connect-effect 会回读新 FW 版本。
   const runOtaMcu = useCallback(
-    async (bin: Uint8Array, onProgress?: (sent: number, total: number) => void) => {
+    async (
+      bin: Uint8Array,
+      onProgress?: (sent: number, total: number) => void,
+    ) => {
       const client = clientRef.current;
       if (!client || connState !== 'connected') {
         throw new Error('请先连接设备');
@@ -1305,7 +1585,32 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       setError(null);
       setOtaActive(true);
       try {
+        // 帧周期不再由界面传：固定 20ms（帧首到帧首）由原生定时器保证，
+        // 见 Mr20Client.otaUpdateMcu 的 frameIntervalMs 默认值。
         await client.otaUpdateMcu(bin, {onProgress});
+      } finally {
+        setOtaActive(false);
+      }
+    },
+    [connState],
+  );
+
+  // WiFi 模组 OTA。与 runOtaMcu 同样独占 BLE，只是最后多一段「等模组烧写」——
+  // 那段没有进度回调，otaActive 必须一直保持到它结束，否则状态轮询会插进去发指令，
+  // 而协议明确「OTA 过程中禁止 APP 发送其他指令，否则会 OTA 失败」。
+  const runOtaWifi = useCallback(
+    async (
+      bin: Uint8Array,
+      onProgress?: (sent: number, total: number) => void,
+    ) => {
+      const client = clientRef.current;
+      if (!client || connState !== 'connected') {
+        throw new Error('请先连接设备');
+      }
+      setError(null);
+      setOtaActive(true);
+      try {
+        await client.otaUpdateWifi(bin, {onProgress});
       } finally {
         setOtaActive(false);
       }
@@ -1368,11 +1673,16 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     openHotspot,
     closeHotspot,
     getHotspotInfo,
-    changeHotspot,
+    initHotspotPassword,
+    saveHotspotPassword,
+    resetHotspotKey,
+    diagnoseWifiSetup,
+    testHotspotJoin,
     startWifiTransfer,
     startWifiTransferPending,
     switchToWifiTransfer,
     continueWifiAfterManualJoin,
+    retryWifiJoinWithPassword,
     cancelWifiTransfer,
     resetWifiTransfer,
     refreshDeviceFiles,
@@ -1389,6 +1699,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     syncTime,
     getDeviceTime,
     runOtaMcu,
+    runOtaWifi,
     forgetDevice,
     factoryReset,
     clearError: () => setError(null),

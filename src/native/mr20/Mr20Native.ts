@@ -22,6 +22,23 @@ export const isMr20WifiAvailable = Boolean(
   nativeModule && typeof (nativeModule as any).wifiReceiveFile === 'function',
 );
 
+/**
+ * 带应答写是否可用。与 WiFi 快传同理：装在手机上的旧二进制没有这个方法，
+ * 直接调用会抛「undefined is not a function」。OTA 前用它决定走哪条路，
+ * 而不是等第一帧才炸。
+ */
+export const isMr20AckWriteAvailable = Boolean(
+  nativeModule && typeof (nativeModule as any).writeWithResponse === 'function',
+);
+
+/**
+ * 原生定时发帧（OTA 严格 20ms 节奏）是否可用。同理，旧二进制里没有这个方法。
+ * 不可用时 Mr20Client 会退回 JS 逐帧循环——能跑，但节奏做不到 20ms，只作兜底。
+ */
+export const isMr20OtaSenderAvailable = Boolean(
+  nativeModule && typeof (nativeModule as any).otaSendFrames === 'function',
+);
+
 const unavailable = async (): Promise<never> => {
   throw new Error('记忆粒原生模块未链接：iOS 需 pod install + 重新构建，Android 需重新构建');
 };
@@ -37,6 +54,9 @@ export const Mr20Native: Spec =
     connect: unavailable,
     disconnect: async () => {},
     writeNoResponse: unavailable,
+    writeWithResponse: unavailable,
+    characteristicInfo: unavailable,
+    maxWriteLength: unavailable,
     monitor: unavailable,
     writeBase64File: unavailable,
     deleteRelativePath: async () => {},
@@ -44,9 +64,12 @@ export const Mr20Native: Spec =
     getDocumentsDir: unavailable,
     wifiJoin: async () => false,
     wifiLeave: async () => {},
+    wifiDiagnostics: async () => ({configuredSSIDs: []}),
     wifiConnect: unavailable,
     wifiReceiveFile: unavailable,
     wifiAbort: async () => {},
+    otaSendFrames: unavailable,
+    otaAbort: async () => {},
   } as Spec);
 
 // 事件用经典 bridge 实例作为源更可靠（RCTEventEmitter 的 startObserving 计数走它）；

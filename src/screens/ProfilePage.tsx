@@ -166,6 +166,7 @@ export function ProfilePage() {
 
         <Pressable onPress={onVersionTap} style={styles.versionWrap}>
           <Text style={styles.versionText}>Remmy v{APP_VERSION}</Text>
+          <Text style={styles.versionSlogan}>Remmy · your life coach</Text>
         </Pressable>
       </ScrollView>
 
@@ -230,4 +231,5 @@ const styles = StyleSheet.create({
   deleteAccountText: {fontSize: 15, fontWeight: '500', color: HW.red},
   versionWrap: {alignItems: 'center', paddingVertical: 24},
   versionText: {fontSize: 12, color: colors.textSub},
+  versionSlogan: {fontSize: 11, color: colors.textSub, letterSpacing: 0.8, marginTop: 4},
 });

@@ -75,6 +75,7 @@ export function LoginScreen({prompt, onClose}: {prompt?: boolean; onClose?: () =
           </TouchableOpacity>
           <View style={styles.hero}>
             <Image source={images.ipStar} style={styles.logo} resizeMode="contain" />
+            <Text style={styles.heroSlogan}>Remmy · your life coach</Text>
             <Text style={styles.heroTitle}>唤醒你的专属 AI</Text>
             <Text style={styles.heroDesc}>AI 驱动的第二大脑，开启跨端记忆同步与调度</Text>
           </View>
@@ -167,6 +168,7 @@ const styles = StyleSheet.create({
   skipText: {color: colors.textSub, fontSize: 15, fontWeight: '600'},
   hero: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24},
   logo: {width: 112, height: 112, marginBottom: 24},
+  heroSlogan: {fontSize: 13, fontWeight: '600', color: colors.textSub, letterSpacing: 1.2, marginBottom: 10},
   heroTitle: {fontSize: 26, fontWeight: '700', color: colors.textMain, marginBottom: 12, letterSpacing: -0.5},
   heroDesc: {fontSize: 15, color: colors.textSub, textAlign: 'center', lineHeight: 22},
   actions: {paddingHorizontal: 24},

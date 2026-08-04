@@ -6,6 +6,18 @@ import {View, Text, StyleSheet, TouchableOpacity, ScrollView} from 'react-native
  * 用于在真机上敲定协议未写明的分帧/粘包细节。
  * 注意：不依赖 ThemeProvider（硬件页子树未套 ThemeProvider），颜色写死。
  */
+/**
+ * 把 `Mr20Client.log()` 加的 `[17:09:23.412 +1.24s]` 前缀拆出来单独调暗。
+ *
+ * 拆而不是直接整行上色，是因为方向色（`=>` 发出 / `<=` 收到）判的是**正文开头**——
+ * 前缀一加，`startsWith('=>')` 就永远为 false，所有行会退成同一个颜色。
+ * 而且时间戳每行都占 22 个字符，和正文同色的话会把真正要看的帧内容淹掉。
+ */
+export function splitStamp(line: string): {stamp: string; body: string} {
+  const m = /^(\[\d{2}:\d{2}:\d{2}\.\d{3} \+[\d.]+s\])\s(.*)$/s.exec(line);
+  return m ? {stamp: m[1], body: m[2]} : {stamp: '', body: line};
+}
+
 export function Mr20DebugLog({logs}: {logs: string[]}) {
   const [open, setOpen] = useState(false);
 
@@ -26,16 +38,17 @@ export function Mr20DebugLog({logs}: {logs: string[]}) {
           {logs.length === 0 ? (
             <Text style={styles.empty}>暂无收发记录</Text>
           ) : (
-            logs.map((line, i) => (
-              <Text
-                key={i}
-                style={[
-                  styles.line,
-                  {color: line.startsWith('=>') ? '#7FD0C6' : '#C9D2C5'},
-                ]}>
-                {line}
-              </Text>
-            ))
+            logs.map((line, i) => {
+              const {stamp, body} = splitStamp(line);
+              return (
+                <Text key={i} style={styles.line}>
+                  {stamp ? <Text style={styles.stamp}>{stamp} </Text> : null}
+                  <Text style={{color: body.startsWith('=>') ? '#7FD0C6' : '#C9D2C5'}}>
+                    {body}
+                  </Text>
+                </Text>
+              );
+            })
           )}
         </ScrollView>
       ) : null}
@@ -60,4 +73,5 @@ const styles = StyleSheet.create({
     fontFamily: 'Menlo',
     lineHeight: 15,
   },
+  stamp: {color: '#5F6B5C'},
 });

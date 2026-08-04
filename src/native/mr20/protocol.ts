@@ -178,8 +178,29 @@ export function parseDeviceTime(s: string): Date | null {
 /**
  * 固定 16 位配对密钥。用确定值（而非随机）避免「密钥一旦没存住就再也配不上」：
  * 设备绑定后，之后每次必须发同一个密钥；固定值保证任何时候/任何手机都能对上。
+ * 设备只取前 {@link MR20_KEY_LEN} 位（0801 起协议如此规定），故等效于 'SeeMemor'。
  */
 export const MR20_PAIR_KEY = 'SeeMemoryMR20K01';
+
+/**
+ * SK 绑定密钥长度。0801：「PWD：8 位（超过 8 位取前 8 位）」。
+ * **这同时也是 WiFi 热点密码的长度**——见 {@link Cmd.syncWifiPassword}，两者是同一个值。
+ * 8 位也正好卡在 WPA2 passphrase 的下限上，短一位就连不上热点。
+ */
+export const MR20_KEY_LEN = 8;
+
+/** 设备只认前 8 位，UI 与入网都得用截断后的值，否则本地存的和热点上的对不上。 */
+export function toDeviceKey(key: string): string {
+  return key.slice(0, MR20_KEY_LEN);
+}
+
+/**
+ * 密钥是否可用作 WPA2 热点密码：必须正好 8 位可打印 ASCII。
+ * 含中文/空格会让 iOS 侧 passphrase 编码与设备端不一致，表现为「无法加入网络」。
+ */
+export function isValidDeviceKey(key: string): boolean {
+  return /^[\x21-\x7e]{8}$/.test(key);
+}
 
 /** 随机生成 16 位绑定密钥（已不用，保留备查）。 */
 export function generateBindKey(): string {
@@ -192,7 +213,11 @@ export function generateBindKey(): string {
 }
 
 export const Cmd = {
-  /** 绑定密钥配对，pwd 必须 16 位。 */
+  /**
+   * 绑定密钥配对。0801 起协议把 PWD 从「16 characters」改成「8 位（超过 8 位取前 8 位）」，
+   * 且**默认该功能是关闭的**——这也是本 App 走裸连探测能连上的原因（见 [[mr20-sk-binding-key]]）。
+   * {@link MR20_PAIR_KEY} 仍是 16 位，设备只取前 8 位，行为不变，故不改值以免已绑设备对不上。
+   */
   bindKey: (pwd: string) => buildCommand('SK', pwd),
   /** 设置设备时间。 */
   setTime: (date: Date) => buildCommand('T', formatDeviceTime(date)),
@@ -245,18 +270,42 @@ export const Cmd = {
   /** 查询 WiFi 状态（0~7）。应答 GJJY_DEV&WIFIS&STA。 */
   getWifiState: () => buildCommand('WIFIS'),
   /**
-   * 修改热点 SSID/密码。协议 R33：GJJY_BLE&WIFI&CH；MCU **不回包**，结果靠轮询 WIFIS 推断
-   * （4=配密码中，6=改完待复位关机）。
-   * ⚠️ 参数拼法（&ssid&pwd）协议未明确，须真机/固件确认；不确定点集中在此一处，方便改。
+   * 把 WiFi 密码同步成当前 SK 绑定密钥。**不带任何参数**。
+   *
+   * 曾长期误实现为 `WIFI&CH&<ssid>&<pwd>`，怎么试都不生效（0703 固件报告记为「参数格式不明」）。
+   * 0801 协议三处互相印证，实际语义是「无参 + 密码取自 SK」：
+   *   1. 命令表里这一行是**光杆** `"GJJY_BLE&WIFI&CH"`——表内其它带参命令都写了占位符
+   *      （`&PWD` `&LEN` `&VAL` `&time` `&DIR_NAME&FNAME`），只有它没有。
+   *   2. SK 那行：「第一次发送为设置密钥（后需发 "GJJY_BLE&WIFI&CH" 指令**同步更改 WiFi 密码**，
+   *      需 10s 左右）」。
+   *   3. 「WiFi功能使用」：「设备**接收到密钥后**，会自动打开 WiFi 并设置 WiFi 密码，
+   *      WiFi 状态为 '4'，设置密码成功后状态为 '6'」。
+   * 即：**热点密码 == SK 密钥（8 位）**，SSID 是设备名、改不了。
+   * MCU 不回包，结果靠轮询 WIFIS 推断（4=配密码中 → 6=改完待复位关机）。
    */
-  changeWifi: (ssid: string, pwd: string) => buildCommand('WIFI', 'CH', ssid, pwd),
+  syncWifiPassword: () => buildCommand('WIFI', 'CH'),
+  /**
+   * 重置绑定密钥。协议：「如连接将断开连接，后需用 GJJY_BLE&SK&PWD 重新设置密钥」。
+   * 用于密钥设错/设备预绑厂商密钥时让用户主动解绑，**会当场断开 BLE**。
+   */
+  resetKey: () => buildCommand('SK', 'RESET'),
   /** 获取 WiFi 模组固件版本。 */
   getWifiVersion: () => buildCommand('WF'),
   // --- OTA 固件升级（MCU）。协议 R42/R44/R61：LEN 固定 6 位（≤999999B≈1MB）。---
   /** 发起 MCU OTA，len=固件字节数（补足 6 位）。应答 GJJY_DEV&OTA 就绪。 */
   otaStart: (len: number) => buildCommand('OTA', String(len).padStart(6, '0')),
-  // WiFi 模组 OTA 预留（0703 已把命令名统一为 OTA&WIFI&LEN，非旧 xlsx 的 WIFI&OTA&LEN）：
-  //   otaWifiStart: (len: number) => buildCommand('OTA', 'WIFI', String(len).padStart(6, '0')),
+  /**
+   * 发起 **WiFi 模组** OTA（协议 R62 第 1 步）。应答同样是 GJJY_DEV&OTA。
+   *
+   * ⚠️ 命令名在 6.26 那份表里自相矛盾：R43 命令表写 `GJJY_BLE&WIFI&OTA&LEN`，
+   * R62 功能说明写 `GJJY_BLE&OTA&WIFI&LEN`。这里取 R62 的写法（0703 那份也已统一成
+   * OTA&WIFI）。若真机对它不回 DEV&OTA，第一件事就是换成 WIFI&OTA 再试。
+   */
+  otaWifiStart: (len: number) =>
+    buildCommand('OTA', 'WIFI', String(len).padStart(6, '0')),
+  /** 同上，R43 命令表的另一种拼法，留作真机对拍。 */
+  otaWifiStartAlt: (len: number) =>
+    buildCommand('WIFI', 'OTA', String(len).padStart(6, '0')),
   /** OTA 固件数据发送完毕。应答 GJJY_DEV&OT&OVER（成功）/ OT&ERR（失败）。 */
   otaOver: () => buildCommand('OT', 'OVER'),
   /** WiFi 传输文件：App 无该文件时（拉全量）。应答 GJJY_DEV&W&LEN。 */
@@ -272,6 +321,53 @@ export const Cmd = {
  * 原生 TCP 接收器持有一份相同常量做检测/剥离；此处导出供 JS 侧/单测引用。
  */
 export const WIFI_END_MARKER = [0xba, 0x5a, 0x02, 0x8f, 0x04] as const;
+
+/**
+ * WIFIS 状态码（协议 0801「获取当前WiFi状态」一行的 STA 取值）。
+ * 之前这些数字散在 Mr20Client 的注释和字面量里，状态机一改就容易对不上号。
+ */
+export const WifiState = {
+  /** '0' WiFi 关闭。 */
+  OFF: 0,
+  /** '1' WiFi 连接（AP 已起且**已有客户端连入**）。 */
+  LINKED: 1,
+  /** '2' WiFi 未连接（AP 已起、还没客户端）——0801 流程第 2 步要求在此态才去连手机。 */
+  AP_IDLE: 2,
+  /** '3' 等待 WiFi 开启（WIFIO 之后的过渡态；设备内部复位也停在这，约 6s）。 */
+  OPENING: 3,
+  /** '4' 修改密码中。 */
+  PWD_CHANGING: 4,
+  /** '5' OTA 中。 */
+  OTA: 5,
+  /** '6' 密码修改成功，等待系统复位关机（之后 5s 自动关，回落到 0）。 */
+  PWD_DONE: 6,
+  /** '7' 自动关闭（开启后 30s 无人连接 / 客户端断开 5s 后）。 */
+  AUTO_OFF: 7,
+  /** 非协议值：WIFIS 无应答或应答无法解析。 */
+  UNKNOWN: -1,
+} as const;
+
+/**
+ * 协议 0801「WiFi功能使用」段落里写死的几个时间常量，状态机按这些数来定超时，
+ * 而不是各处拍脑袋填。
+ */
+export const WIFI_TIMING = {
+  /** AP 起来后 30s 内没有客户端连入就自动关闭——入网 + 建 socket 必须挤进这个窗口。 */
+  IDLE_AUTO_CLOSE_MS: 30000,
+  /** 「收到密钥 → 自动开 WiFi 配密码」整轮约 8s（状态 4 → 6），完成后再 5s 自动关。 */
+  PWD_CYCLE_MS: 8000,
+  /** WiFi 出问题时设备自行复位约 6s，期间 WIFIS 停在 3。 */
+  RESET_MS: 6000,
+  /**
+   * 等 `SK&PWD` 应答的上限。**协议这条应答慢得反直觉：固件方说要 10s 左右**——
+   * 因为设备收到密钥后要顺带把 WiFi 密码配一遍（「WiFi功能使用」段：收到密钥后自动开
+   * WiFi 配密码，状态 4 → 6，整轮约 8s）才回话。
+   *
+   * 早先按普通命令的 8s 算，比应答本身还短，等于**每次都必然超时**；再加上 8s > 常规
+   * 命令的体感，日志里看起来又像「设备不应答」。取 15s 留够余量。
+   */
+  SK_ACK_MS: 15000,
+} as const;
 
 // ---------------------------------------------------------------------------
 // 应答解析（设备 -> App）
@@ -312,6 +408,7 @@ export type DeviceMessage =
   | {type: 'OTA_READY'} // DEV&OTA：设备已就绪，可发固件帧
   | {type: 'OTA_DONE'} // OT&OVER：固件数据接收完成
   | {type: 'OTA_ERR'} // OT&ERR：固件数据接收失败
+  | {type: 'WIFI_OTA_ERR'} // OW&ERR：WiFi 模组烧录失败（数据已收全，刷写阶段挂了）
   | {type: 'UNKNOWN'; raw: string; tokens: string[]};
 
 /** 一个收到的帧（已 ascii 化）是否是文本命令帧。 */
@@ -435,6 +532,10 @@ export function parseDeviceMessage(rawInput: string): DeviceMessage {
     case 'OT':
       // GJJY_DEV&OT&OVER 成功 / OT&ERR 失败。
       return tokens[1] === 'ERR' ? {type: 'OTA_ERR'} : {type: 'OTA_DONE'};
+    case 'OW':
+      // GJJY_DEV&OW&ERR：WiFi 模组**烧录**失败（R62 第 5 步）。注意与 OT&ERR 不同——
+      // OT&ERR 是「数据没收全」，OW&ERR 是「收全了但刷进模组时失败」。
+      return {type: 'WIFI_OTA_ERR'};
     default:
       return {type: 'UNKNOWN', raw, tokens};
   }

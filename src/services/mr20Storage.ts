@@ -10,6 +10,8 @@ const KEYS = {
   PAIRED: () => scopedKey('paired'),
   SYNCED: () => scopedKey('synced'),
   BATCH: () => scopedKey('batch'), // 当前/最近一次提交的后端批处理 groupId
+  WIFI_PWD: () => scopedKey('wifiPwd'), // 用户设置/确认过的热点密码（= SK 8 位密钥）
+  WIFI_PROV: () => scopedKey('wifiProv'), // 已成功跑过 SK+WIFI&CH 初始化的那把密钥
 };
 
 export interface Mr20PairedDevice {
@@ -46,6 +48,51 @@ export async function getPairedDevice(): Promise<Mr20PairedDevice | null> {
 
 export async function clearPairedDevice(): Promise<void> {
   await AsyncStorage.removeItem(KEYS.PAIRED());
+}
+
+// ---------------------------------------------------------------------------
+// 热点密码（= SK 8 位绑定密钥，见 protocol.ts 的 Cmd.syncWifiPassword）
+// ---------------------------------------------------------------------------
+
+/**
+ * 存用户初始化/手填过的热点密码。
+ *
+ * 为什么要本地存一份而不是每次现问设备：`GJJY_BLE&WIFI` 回的 PWD 在部分固件上是**旧值/默认值**，
+ * 拿它去 NEHotspotConfiguration 入网就得到 iOS 那句「无法加入网络 YLF20_xxxx」。
+ * 用户在 App 里亲手设过的值最可信，故入网时优先用这里的，设备回的只作兜底。
+ */
+export async function saveWifiPassword(pwd: string): Promise<void> {
+  await AsyncStorage.setItem(KEYS.WIFI_PWD(), pwd);
+}
+
+export async function getWifiPassword(): Promise<string | null> {
+  return AsyncStorage.getItem(KEYS.WIFI_PWD());
+}
+
+export async function clearWifiPassword(): Promise<void> {
+  await AsyncStorage.removeItem(KEYS.WIFI_PWD());
+}
+
+/**
+ * 记下「已经对这把密钥跑过 SK + WIFI&CH 初始化」。
+ *
+ * 存的是**密钥本身而不是布尔值**：换密码后旧标记必须自动失效，否则会拿新密码去连按旧密码
+ * 配的热点。判定就是 `getWifiProvisionedKey() === 要用的密钥`。
+ *
+ * 为什么要记：WIFI&CH 每跑一次要 10s 还会把 WiFi 模组复位一遍（协议 0801），
+ * 每次快传都跑等于白搭 10 秒。而它是一次性的——固件方原话是「第一次发 SK 设置之后」。
+ * 入网全部失败时会清掉这个标记，下次自动重跑，避免设备被恢复出厂后永远卡在旧结论上。
+ */
+export async function saveWifiProvisionedKey(key: string): Promise<void> {
+  await AsyncStorage.setItem(KEYS.WIFI_PROV(), key);
+}
+
+export async function getWifiProvisionedKey(): Promise<string | null> {
+  return AsyncStorage.getItem(KEYS.WIFI_PROV());
+}
+
+export async function clearWifiProvisionedKey(): Promise<void> {
+  await AsyncStorage.removeItem(KEYS.WIFI_PROV());
 }
 
 // ---------------------------------------------------------------------------

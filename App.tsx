@@ -1,5 +1,5 @@
 /**
- * SiMemory - AI Memory Assistant
+ * Remmy - AI Memory Assistant
  * Faithful RN port of the app-prototype UI (single light iOS-style theme,
  * hub-and-spoke navigation: Home hub + FAB capsule + global drawer).
  */
@@ -24,6 +24,7 @@ import {
   saveBasePrivacyConsent,
 } from './src/privacy/consentStorage';
 import {AIConsentProvider} from './src/privacy/AIConsentContext';
+import {AppVersionGate} from './src/appVersion/AppVersionGate';
 import {colors} from './src/design/tokens';
 
 /** Login overlay shown when a guest triggers a write action. */
@@ -111,17 +112,19 @@ function BasePrivacyGate({children}: {children: ReactNode}) {
 function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
-      <BasePrivacyGate>
-        <AuthProvider>
-          <AIConsentProvider>
-            <AppDrawerProvider>
-              <LoginPromptProvider>
-                <AuthGate />
-              </LoginPromptProvider>
-            </AppDrawerProvider>
-          </AIConsentProvider>
-        </AuthProvider>
-      </BasePrivacyGate>
+      <AppVersionGate>
+        <BasePrivacyGate>
+          <AuthProvider>
+            <AIConsentProvider>
+              <AppDrawerProvider>
+                <LoginPromptProvider>
+                  <AuthGate />
+                </LoginPromptProvider>
+              </AppDrawerProvider>
+            </AIConsentProvider>
+          </AuthProvider>
+        </BasePrivacyGate>
+      </AppVersionGate>
     </SafeAreaProvider>
   );
 }

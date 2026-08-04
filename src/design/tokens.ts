@@ -1,5 +1,5 @@
 /**
- * SiMemory design tokens — faithful to the app-prototype web design
+ * Remmy design tokens — faithful to the app-prototype web design
  * (app-prototype/src/index.css). Single light iOS-style theme; a few
  * sub-pages (membership / power store / historical mood) use the `dark`
  * sub-palette. All RN UI reads from here instead of the legacy 3-theme system.

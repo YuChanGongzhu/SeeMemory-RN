@@ -7,6 +7,7 @@ const KEYS = {
   API_KEY: '@ringmemory:api_key',
   SELECTED_DEVICE: '@ringmemory:selected_device',
   API_ENV: '@ringmemory:api_env',
+  DISMISSED_UPDATE_VERSION: '@ringmemory:dismissed_update_version',
 };
 
 export interface SelectedDevice {
@@ -74,6 +75,20 @@ export async function saveApiEnv(env: ApiEnv): Promise<void> {
 export async function getStoredApiEnv(): Promise<ApiEnv> {
   const val = await AsyncStorage.getItem(KEYS.API_ENV);
   return val === 'test' ? 'test' : 'prod';
+}
+
+// 软提示"以后再说"后记住的最新版本码，同一版本不再重复打扰；跨登出/登录存活，故意不放进 clearSession。
+export async function saveDismissedUpdateVersion(versionCode: number): Promise<void> {
+  await AsyncStorage.setItem(KEYS.DISMISSED_UPDATE_VERSION, String(versionCode));
+}
+
+export async function getDismissedUpdateVersion(): Promise<number | null> {
+  const raw = await AsyncStorage.getItem(KEYS.DISMISSED_UPDATE_VERSION);
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export async function clearSession(): Promise<void> {
