@@ -1,5 +1,5 @@
 import React from 'react';
-import {View, Text, Image, TouchableOpacity, StyleSheet} from 'react-native';
+import {View, Text, Image, TouchableOpacity, Pressable, StyleSheet} from 'react-native';
 import {Play, Pause, FileText} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {useImagePreview} from '../hooks/useImagePreview';
@@ -24,12 +24,15 @@ export function TimelineNode({
   node,
   playing,
   onTogglePlay,
+  onLongPress,
   playbackTime,
   playbackDuration,
 }: {
   node: TimelineRecord;
   playing?: boolean;
   onTogglePlay?: (url: string) => void;
+  /** 详情页传入后，长按当前时间流对象进入编辑；其他只读场景不传。 */
+  onLongPress?: () => void;
   playbackTime?: number;
   playbackDuration?: number;
 }) {
@@ -53,12 +56,18 @@ export function TimelineNode({
   const docSize = node.doc?.size;
 
   return (
-    <View style={{gap: 10}}>
+    <Pressable
+      style={({pressed}) => [styles.root, pressed && onLongPress ? styles.rootPressed : null]}
+      onLongPress={onLongPress}
+      delayLongPress={450}
+      accessibilityHint={onLongPress ? '长按编辑这条时间流记录' : undefined}>
       {isAudio ? (
         <TouchableOpacity
           activeOpacity={canPlay ? 0.8 : 1}
           disabled={!canPlay}
           onPress={canPlay ? () => onTogglePlay!(node.url!) : undefined}
+          onLongPress={onLongPress}
+          delayLongPress={450}
           style={styles.audio}>
           <View style={styles.audioPlay}>
             {playing ? (
@@ -93,7 +102,12 @@ export function TimelineNode({
       {images.length > 0 ? (
         <View style={{gap: 8}}>
           {images.map((u, i) => (
-            <TouchableOpacity key={i} activeOpacity={0.9} onPress={() => preview(u)}>
+            <TouchableOpacity
+              key={i}
+              activeOpacity={0.9}
+              onPress={() => preview(u)}
+              onLongPress={onLongPress}
+              delayLongPress={450}>
               <Image source={{uri: u}} style={styles.image} resizeMode="cover" />
             </TouchableOpacity>
           ))}
@@ -117,11 +131,13 @@ export function TimelineNode({
           <Text style={styles.textBody}>{node.content}</Text>
         </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {gap: 10, borderRadius: 16},
+  rootPressed: {opacity: 0.72},
   audio: {flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.darkCard, borderRadius: radius.pill, paddingVertical: 14, paddingHorizontal: 16, alignSelf: 'flex-start', minWidth: 200},
   audioPlay: {width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center'},
   audioName: {fontSize: 15, fontWeight: '600', color: '#fff', marginBottom: 4},

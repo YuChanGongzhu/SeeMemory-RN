@@ -52,6 +52,9 @@ export function searchMemoryFiles(params: SearchMemoryFilesParams): Promise<Memo
 export interface FragmentTimelineItem {
   time: string;
   content: string;
+  /** 旧 memory 版本可能不返回，mapper 按 text / [] 回退。 */
+  type?: 'text' | 'image' | 'video' | 'audio' | 'doc';
+  media_ids?: string[];
 }
 
 export interface MemoryFragmentMedia {

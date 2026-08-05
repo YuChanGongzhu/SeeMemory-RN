@@ -20,6 +20,16 @@ export interface TimelineRecord {
   name?: string;
   duration?: string;
   doc?: {name: string; size?: string};
+  /** 仅后端真实 timeline 节点携带；合成媒体节点没有编辑目标。 */
+  timelineTarget?: TimelineEditTarget;
+}
+
+export interface TimelineEditTarget {
+  index: number;
+  time: string;
+  type: 'audio' | 'video' | 'image' | 'text' | 'doc';
+  content: string;
+  mediaIds: string[];
 }
 
 export interface MemoryCard {
@@ -32,6 +42,8 @@ export interface MemoryCard {
    * 不要去猜 id 前缀——那是黑名单，加一种合成卡就漏一次。
    */
   fragmentId?: string;
+  /** 后端 optimistic-concurrency 版本，必须保留完整秒级字符串。 */
+  fragmentUpdateTime?: string;
   type: 'memory';
   tag: string;
   tagColor?: string;

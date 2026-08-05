@@ -13,11 +13,13 @@ import type {TimelineRecord} from '../types/memory';
 import {saveMemory} from '../apis/requests/memory';
 import {
   submitMemoryCorrection,
+  submitTimelineMemoryCorrection,
   getMemoryCorrection,
   retryMemoryCorrection,
   correctionStageLabel,
   newCorrectionRequestId,
   INSTRUCTION_MAX_LEN,
+  TIMELINE_EDIT_MAX_LEN,
   type MemoryCorrection,
 } from '../apis/requests/corrections';
 import {markMemoryDirty} from '../apis/core/memoryDirty';
@@ -29,13 +31,13 @@ type Block = {id: string; type: 'text'; value: string};
 let seq = 0;
 const uid = () => `b_${++seq}`;
 
-type EditorMode = 'new' | 'edit' | 'append';
+type EditorMode = 'new' | 'edit' | 'append' | 'timeline';
 
 /**
  * 编辑器 —— 按 mode 分两条完全不同的路径：
  * - new：块编辑器写一条新记忆，走 POST /app/memory/save。
- * - edit / append：**修正指令**面板。后端 corrections 收的是自然语言指令而非改后的文本，
- *   受理后异步重建，所以这里是「说一句怎么改」+ 轮询进度，而不是直接改正文。
+ * - edit / append：**修正指令**面板。后端 corrections 收的是自然语言指令而非改后的文本。
+ * - timeline：时间流对象直接提交结构化节点快照，后端做并发校验并重建记忆链。
  */
 export function EditorPage() {
   const nav = useNav();
@@ -158,14 +160,16 @@ const PLACEHOLDER: Record<'edit' | 'append', string> = {
   append: '想补充点什么？\n例如：那天下午还去了海边',
 };
 
-function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
+function CorrectionPanel({mode}: {mode: Exclude<EditorMode, 'new'>}) {
   const nav = useNav();
   const {requestAiConsent} = useAIConsent();
   const insets = useSafeAreaInsets();
   const card = nav.current.params?.card;
-  const headerTitle = mode === 'append' ? '追加细节' : '编辑记忆';
+  const timelineRecord: TimelineRecord | undefined = nav.current.params?.timelineRecord;
+  const timelineMode = mode === 'timeline';
+  const headerTitle = timelineMode ? '编辑时间流' : mode === 'append' ? '追加细节' : '编辑记忆';
 
-  const [instruction, setInstruction] = useState('');
+  const [instruction, setInstruction] = useState(() => timelineMode ? timelineRecord?.content || '' : '');
   const [correction, setCorrection] = useState<MemoryCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -197,17 +201,24 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
     };
   }, [stopPolling]);
 
+  const leave = useCallback(() => {
+    // 时间流详情当前持有的是进入页面时的卡片快照；完成后回首页让列表重新拉取，
+    // 避免返回一个看起来“没改成功”的旧时间流。整条记忆编辑保持既有返回行为。
+    if (timelineMode) nav.home();
+    else nav.pop();
+  }, [nav, timelineMode]);
+
   const finish = useCallback(() => {
     markMemoryDirty();
-    nav.pop();
-  }, [nav]);
+    leave();
+  }, [leave]);
 
   /** 轮询超时：后端仍在跑，只是不再占着这个页面。不标 dirty——重建没完，刷新只会拿到旧数据。 */
   const bailOutStillRunning = useCallback(() => {
     setBusy(false);
     Alert.alert('仍在处理中', '修正已受理，完成后回列表刷新即可看到。');
-    nav.pop();
-  }, [nav]);
+    leave();
+  }, [leave]);
 
   const poll = useCallback(
     async (correctionId: string) => {
@@ -270,16 +281,20 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
   );
 
   const submit = async () => {
-    const text = instruction.trim();
-    if (!text || busy) return;
+    const editedText = instruction.trim();
+    if (!editedText || busy) return;
     const anchorId = card?.fragmentId;
     if (!anchorId) {
       setError('这条记忆不支持修改');
       return;
     }
+    if (timelineMode && (!timelineRecord?.timelineTarget || !card?.fragmentUpdateTime)) {
+      setError('这条时间流记录已不存在，请返回后重试');
+      return;
+    }
     const allowed = await requestAiConsent({
-      data: '修正指令及对应的记忆内容',
-      purpose: '发送给第三方 AI 服务重写并更新记忆',
+      data: timelineMode ? '修改后的时间流文字及对应记忆内容' : '修正指令及对应的记忆内容',
+      purpose: timelineMode ? '发送给第三方 AI 服务修正时间流并重建关联记忆' : '发送给第三方 AI 服务重写并更新记忆',
     });
     if (!allowed) {
       return;
@@ -288,14 +303,21 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
     setBusy(true);
     setError(null);
     try {
-      const result = await submitMemoryCorrection({
-        anchorType: 'fragment',
-        anchorId,
-        instruction: text,
-        // 每次提交都用新 key：后端对「同 key 不同指令」直接 409，
-        // 用户改了指令重提时复用旧 key 必然失败。
-        requestId: newCorrectionRequestId(anchorId),
-      });
+      const requestId = newCorrectionRequestId(anchorId);
+      const result = timelineMode
+        ? await submitTimelineMemoryCorrection({
+            fragmentId: anchorId,
+            expectedUpdateTime: card.fragmentUpdateTime!,
+            target: timelineRecord!.timelineTarget!,
+            correctedText: editedText,
+            requestId,
+          })
+        : await submitMemoryCorrection({
+            anchorType: 'fragment',
+            anchorId,
+            instruction: editedText,
+            requestId,
+          });
       if (!mountedRef.current) return;
       handleAccepted(result);
     } catch (e) {
@@ -327,7 +349,10 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
     }
   };
 
-  const canSubmit = instruction.trim().length > 0 && !busy;
+  const originalTimelineText = timelineRecord?.content?.trim() || '';
+  const canSubmit = instruction.trim().length > 0
+    && (!timelineMode || instruction.trim() !== originalTimelineText)
+    && !busy;
 
   return (
     <KeyboardAvoidingView
@@ -349,52 +374,72 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
       </View>
 
       <ScrollView style={{flex: 1}} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-        {/* 只读回显。要说清「哪里错了」就得能看到原文，所以摘要之外还能展开全量时间流，
-            否则用户对着 4 行截断的摘要根本无从下笔。 */}
-        <View style={styles.anchorCard}>
-          <Text style={styles.anchorLabel}>正在修正</Text>
-          {card?.title ? <Text style={styles.anchorTitle}>{card.title}</Text> : null}
-          {anchorBrief ? (
-            <Text style={styles.anchorBrief} numberOfLines={expanded ? undefined : 4}>
-              {anchorBrief}
-            </Text>
-          ) : null}
-
-          {expanded && timelineRecords.length ? (
-            <View style={styles.anchorTimeline}>
-              {timelineRecords.map(node => (
-                <View key={node.id} style={styles.anchorNode}>
-                  <Text style={styles.anchorNodeTime}>{node.time}</Text>
-                  <View style={{flex: 1}}>
-                    <TimelineNode
-                      node={node}
-                      playing={!!node.url && player.playingId === node.url}
-                      onTogglePlay={url => player.toggle(url, url).catch(() => {})}
-                      playbackTime={player.playingId === node.url ? player.currentTime : undefined}
-                      playbackDuration={player.playingId === node.url ? player.duration : undefined}
-                    />
-                  </View>
+        {timelineMode ? (
+          <View style={styles.anchorCard}>
+            <Text style={styles.anchorLabel}>正在编辑时间流对象</Text>
+            {card?.title ? <Text style={styles.anchorTitle}>{card.title}</Text> : null}
+            {timelineRecord ? (
+              <View style={styles.timelineTarget}>
+                <Text style={styles.anchorNodeTime}>{timelineRecord.time || '未标注时间'}</Text>
+                <View style={{flex: 1}}>
+                  <TimelineNode
+                    node={timelineRecord}
+                    playing={!!timelineRecord.url && player.playingId === timelineRecord.url}
+                    onTogglePlay={url => player.toggle(url, url).catch(() => {})}
+                    playbackTime={player.playingId === timelineRecord.url ? player.currentTime : undefined}
+                    playbackDuration={player.playingId === timelineRecord.url ? player.duration : undefined}
+                  />
                 </View>
-              ))}
-            </View>
-          ) : null}
+              </View>
+            ) : <Text style={styles.anchorBrief}>时间流对象不存在</Text>}
+          </View>
+        ) : (
+          /* 只读回显。要说清「哪里错了」就得能看到原文，所以摘要之外还能展开全量时间流。 */
+          <View style={styles.anchorCard}>
+            <Text style={styles.anchorLabel}>正在修正</Text>
+            {card?.title ? <Text style={styles.anchorTitle}>{card.title}</Text> : null}
+            {anchorBrief ? (
+              <Text style={styles.anchorBrief} numberOfLines={expanded ? undefined : 4}>
+                {anchorBrief}
+              </Text>
+            ) : null}
 
-          {canExpand ? (
-            <TouchableOpacity style={styles.anchorToggle} onPress={() => setExpanded(v => !v)}>
-              <Text style={styles.anchorToggleText}>{expanded ? '收起' : '展开全文'}</Text>
-              <ChevronDown
-                size={14}
-                strokeWidth={2.4}
-                color={colors.textSub}
-                style={expanded ? styles.anchorToggleIconUp : undefined}
-              />
-            </TouchableOpacity>
-          ) : null}
-        </View>
+            {expanded && timelineRecords.length ? (
+              <View style={styles.anchorTimeline}>
+                {timelineRecords.map(node => (
+                  <View key={node.id} style={styles.anchorNode}>
+                    <Text style={styles.anchorNodeTime}>{node.time}</Text>
+                    <View style={{flex: 1}}>
+                      <TimelineNode
+                        node={node}
+                        playing={!!node.url && player.playingId === node.url}
+                        onTogglePlay={url => player.toggle(url, url).catch(() => {})}
+                        playbackTime={player.playingId === node.url ? player.currentTime : undefined}
+                        playbackDuration={player.playingId === node.url ? player.duration : undefined}
+                      />
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            {canExpand ? (
+              <TouchableOpacity style={styles.anchorToggle} onPress={() => setExpanded(v => !v)}>
+                <Text style={styles.anchorToggleText}>{expanded ? '收起' : '展开全文'}</Text>
+                <ChevronDown
+                  size={14}
+                  strokeWidth={2.4}
+                  color={colors.textSub}
+                  style={expanded ? styles.anchorToggleIconUp : undefined}
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        )}
 
         <TextInput
           style={styles.instruction}
-          placeholder={PLACEHOLDER[mode]}
+          placeholder={timelineMode ? '输入修改后的时间流内容' : PLACEHOLDER[mode]}
           placeholderTextColor={colors.textTertiary}
           value={instruction}
           onChangeText={t => {
@@ -403,14 +448,13 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
           }}
           editable={!busy}
           multiline
-          maxLength={INSTRUCTION_MAX_LEN}
+          maxLength={timelineMode ? TIMELINE_EDIT_MAX_LEN : INSTRUCTION_MAX_LEN}
         />
         <Text style={styles.counter}>
-          {instruction.length}/{INSTRUCTION_MAX_LEN}
+          {instruction.length}/{timelineMode ? TIMELINE_EDIT_MAX_LEN : INSTRUCTION_MAX_LEN}
         </Text>
 
-        {/* 提交后先跑一次 LLM 蒸馏（可达数十秒）才拿到 correction，
-            所以进度条按 busy 显示、不等 correction，否则这段时间界面完全没反应。 */}
+        {/* 整卡编辑可能先跑 LLM 蒸馏；时间流结构化入口则直接受理。 */}
         {busy ? (
           <View style={styles.progress}>
             <ActivityIndicator size="small" color={colors.textMain} />
@@ -451,7 +495,9 @@ function CorrectionPanel({mode}: {mode: 'edit' | 'append'}) {
         ) : null}
 
         <Text style={styles.hint}>
-          说清楚「哪里不对、应该是什么」即可，AI 会理解并重新整理这条记忆及其关联内容。
+          {timelineMode
+            ? '保存后会提交针对这条时间流的修正，并重新整理受影响的摘要与关联记忆。'
+            : '说清楚「哪里不对、应该是什么」即可，AI 会理解并重新整理这条记忆及其关联内容。'}
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -492,6 +538,7 @@ const styles = StyleSheet.create({
   anchorBrief: {fontSize: 14, lineHeight: 21, color: colors.textSub},
   anchorTimeline: {marginTop: 14, gap: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: 14},
   anchorNode: {flexDirection: 'row', gap: 10},
+  timelineTarget: {flexDirection: 'row', gap: 10, marginTop: 10, alignItems: 'flex-start'},
   anchorNodeTime: {width: 40, fontSize: 12, fontWeight: '600', color: colors.textTertiary, paddingTop: 2},
   anchorToggle: {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12, alignSelf: 'flex-start'},
   anchorToggleText: {fontSize: 13, fontWeight: '600', color: colors.textSub},

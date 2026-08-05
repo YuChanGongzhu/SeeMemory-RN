@@ -33,6 +33,7 @@ import {
   clearWifiPassword,
   clearWifiProvisionedKey,
   getBatchGroupId,
+  getBatchTrackingGroupIds,
   getSyncedSet,
   getPairedDevice,
   getWifiPassword,
@@ -40,6 +41,7 @@ import {
   saveBatchGroupId,
   saveWifiPassword,
   saveWifiProvisionedKey,
+  saveBatchTrackingGroupIds,
 } from '../services/mr20Storage';
 import {
   applyBatchResult,
@@ -57,6 +59,9 @@ import {
   getBatchProgress,
   getBatchResult,
   isBatchTerminal,
+  mergeBatchProgress,
+  mergeBatchResults,
+  resolveBatchPollingGroupIds,
   retryBatch,
 } from '../services/audioBatch';
 import {
@@ -115,6 +120,8 @@ export interface WifiTransferSummary {
 /** 当前/最近一次后端批处理的轻量快照（喂给 UI 的进度/结果卡）。 */
 export interface Mr20BatchState {
   groupId: string;
+  /** 实际轮询 ID：新版服务端为聚合父 ID；旧拆组服务端为全部子组 ID。 */
+  pollingGroupIds?: string[];
   status: string;
   completed: number;
   total: number;
@@ -1415,11 +1422,31 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     setWifiSteps({provision: 'pending', open: 'pending', join: 'pending', reachable: 'pending'});
   }, []);
 
-  // 批处理完成：拉结果，回填转写 + 总结 + 问题。
+  const loadBatchProgress = useCallback(
+    async (groupId: string, pollingGroupIds: string[]) => {
+      const groups = await Promise.all(
+        pollingGroupIds.map(id => getBatchProgress(id)),
+      );
+      return mergeBatchProgress(groupId, groups);
+    },
+    [],
+  );
+
+  const loadBatchResult = useCallback(
+    async (groupId: string, pollingGroupIds: string[]) => {
+      const groups = await Promise.all(
+        pollingGroupIds.map(id => getBatchResult(id)),
+      );
+      return mergeBatchResults(groupId, groups);
+    },
+    [],
+  );
+
+  // 批处理完成：拉聚合父组或全部旧版子组结果，回填转写 + 总结 + 问题。
   const finishBatch = useCallback(
-    async (groupId: string) => {
+    async (groupId: string, pollingGroupIds: string[]) => {
       try {
-        const res = await getBatchResult(groupId);
+        const res = await loadBatchResult(groupId, pollingGroupIds);
         await applyBatchResult(groupId, res.results || []);
         setCurrentBatch(prev =>
           prev && prev.groupId === groupId
@@ -1438,13 +1465,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         setError(String((e as Error)?.message || e));
       }
     },
-    [refreshInbox],
+    [loadBatchResult, refreshInbox],
   );
 
-  // 轮询某批次进度直到终态（completed / completed_with_error），再拉结果。
+  // 轮询聚合父组；若接入旧拆组 manager-api，则遍历所有子组后在本地合并。
   // 用 activeGroupRef 保证只有最新批次在轮询；进度查询偶发失败不中断、继续重试。
   const pollBatch = useCallback(
-    (groupId: string) => {
+    (groupId: string, pollingGroupIds: string[]) => {
       activeGroupRef.current = groupId;
       lastResultCompletedRef.current = 0;
       if (pollTimerRef.current) {
@@ -1456,7 +1483,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           return; // 已被新批次顶替
         }
         try {
-          const p = await getBatchProgress(groupId);
+          const p = await loadBatchProgress(groupId, pollingGroupIds);
           setCurrentBatch(prev =>
             prev && prev.groupId === groupId
               ? {...prev, status: p.status, completed: p.completedFiles, total: p.totalFiles}
@@ -1466,7 +1493,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           // 常规 tick 只发轻量进度请求；仅在有新完成时才多发一次 /result。
           if (p.completedFiles > lastResultCompletedRef.current) {
             try {
-              const res = await getBatchResult(groupId);
+              const res = await loadBatchResult(groupId, pollingGroupIds);
               if (activeGroupRef.current !== groupId) {
                 return; // 拉结果期间被新批次顶替
               }
@@ -1479,7 +1506,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           }
           if (isBatchTerminal(p.status)) {
             activeGroupRef.current = null;
-            await finishBatch(groupId);
+            await finishBatch(groupId, pollingGroupIds);
             return;
           }
         } catch {
@@ -1491,7 +1518,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       };
       tick();
     },
-    [finishBatch, refreshInbox],
+    [finishBatch, loadBatchProgress, loadBatchResult, refreshInbox],
   );
 
   // 上传一批已同步文件到 COS → 提交后端批处理 → 标记 queued → 启动轮询。
@@ -1535,16 +1562,21 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           transcription: u.transcript?.trim() || undefined,
         }));
         const group = await createAudioBatch(payload);
+        const pollingGroupIds = resolveBatchPollingGroupIds(group);
         await markItemsQueued(uploaded.map(u => u.id), group.groupId);
-        await saveBatchGroupId(group.groupId);
+        await Promise.all([
+          saveBatchGroupId(group.groupId),
+          saveBatchTrackingGroupIds(group.groupId, pollingGroupIds),
+        ]);
         setCurrentBatch({
           groupId: group.groupId,
+          pollingGroupIds,
           status: group.status || 'pending',
           completed: 0,
           total: group.totalFiles || uploaded.length,
         });
         await refreshInbox();
-        pollBatch(group.groupId);
+        pollBatch(group.groupId, pollingGroupIds);
       } catch (e) {
         setError(String((e as Error)?.message || e));
       } finally {
@@ -1592,10 +1624,13 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     if (!groupId) {
       return;
     }
+    const pollingGroupIds = currentBatch.pollingGroupIds?.length
+      ? currentBatch.pollingGroupIds
+      : [groupId];
     setError(null);
     try {
-      await retryBatch(groupId);
-      pollBatch(groupId);
+      await Promise.all(pollingGroupIds.map(id => retryBatch(id)));
+      pollBatch(groupId, pollingGroupIds);
     } catch (e) {
       setError(String((e as Error)?.message || e));
     }
@@ -1628,23 +1663,24 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
     restoredRef.current = true;
     getBatchGroupId()
-      .then(gid => {
+      .then(async gid => {
         if (!gid) {
           return;
         }
-        return getBatchProgress(gid).then(p => {
-          setCurrentBatch({
-            groupId: gid,
-            status: p.status,
-            completed: p.completedFiles,
-            total: p.totalFiles,
-          });
-          if (isBatchTerminal(p.status)) {
-            finishBatch(gid);
-          } else {
-            pollBatch(gid);
-          }
+        const pollingGroupIds = await getBatchTrackingGroupIds(gid);
+        const p = await loadBatchProgress(gid, pollingGroupIds);
+        setCurrentBatch({
+          groupId: gid,
+          pollingGroupIds,
+          status: p.status,
+          completed: p.completedFiles,
+          total: p.totalFiles,
         });
+        if (isBatchTerminal(p.status)) {
+          finishBatch(gid, pollingGroupIds);
+        } else {
+          pollBatch(gid, pollingGroupIds);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -1654,7 +1690,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         pollTimerRef.current = null;
       }
     };
-  }, [finishBatch, pollBatch]);
+  }, [finishBatch, loadBatchProgress, pollBatch]);
 
   const startRecording = useCallback(async () => {
     await clientRef.current?.startRecording();

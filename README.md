@@ -2,6 +2,8 @@
 
 `RingMemoryApp` 是一个基于 React Native 的记忆采集配套 App，当前接入 MR20（记忆粒）与 Rokid 眼镜两种硬件，可在真机上进行设备扫描、连接、录音、本地保存、播放以及调试上传。
 
+当前 Remmy 产品界面、页面结构和视觉规则见 [前端 App 形态概览](docs/frontend-app-overview.md)。
+
 本文档面向拿到项目后需要使用 Xcode 在 iPhone 上编译运行的同学。
 
 ## 功能概览
