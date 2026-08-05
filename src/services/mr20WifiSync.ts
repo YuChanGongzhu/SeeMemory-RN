@@ -112,17 +112,27 @@ export async function connectWifi(
 
   // 2) 首次配网：SK 设密钥 → WIFI&CH 同步到 WiFi 模组。必须在开热点**之前**——WIFI&CH 结束时
   //    设备会复位 WiFi 模组（协议：状态 6 后 5 秒自动关闭），先开的热点会被这次复位带走。
-  const wantKey = (await getWifiPassword().catch(() => null)) || DEVICE_WIFI_DEFAULT_PWD;
+  //
+  // ⚠️ `savedKey` 和 `wantKey` 分开：`wantKey` 后面（第 4 步猜密码入网）可以兜底
+  // DEVICE_WIFI_DEFAULT_PWD——那只是"试着连一下"，不改设备任何状态，猜错了大不了失败。
+  // 但**要不要主动改写设备密钥**必须只看 `savedKey`（本机是否真的存过这台设备的密码，
+  // 即用户是否已经走过「重置密钥后重新配网」/「初始化热点密码」）：`SK&<任意值>` 在设备
+  // 当前没有密钥时会被当场原样接受，等于"认领"。以前这里用 wantKey（没存密码时会退到共享
+  // 默认值）判断"要不要配网"，导致任何一台从没手动设置过的全新设备，只要用户点一次
+  // WiFi 快传，就会被自动、悄悄地焊死在全 App 共享的默认密钥上——这正是设备被 SeeMemor
+  // 焊死的真实机制，也是它被从这里删掉的原因，见 [[mr20-account-binding-flow]]。
+  const savedKey = await getWifiPassword().catch(() => null);
+  const wantKey = savedKey || DEVICE_WIFI_DEFAULT_PWD;
   const provisionedKey = await getWifiProvisionedKey().catch(() => null);
   let justProvisioned = false;
-  if (provisionedKey !== wantKey) {
+  if (savedKey && provisionedKey !== savedKey) {
     onStep?.('provision', 'active');
     client.log(
-      `[wifi] 尚未对密钥「${wantKey}」做过配网初始化，按协议先跑 SK + WIFI&CH（约 10~20s，仅首次）`,
+      `[wifi] 尚未对密钥「${savedKey}」做过配网初始化，按协议先跑 SK + WIFI&CH（约 10~20s，仅首次）`,
     );
     // 失败不抛错：设备多半仍能用出厂密码连上，为一步没走通断掉整次快传是因小失大。
     const prov = await client
-      .provisionWifiPassword(wantKey)
+      .provisionWifiPassword(savedKey)
       .catch(e => {
         client.log(`[wifi] 配网初始化异常：${String((e as Error)?.message || e)}`);
         return null;
@@ -133,14 +143,16 @@ export async function connectWifi(
     if (sentKey) {
       // 密钥可能已经进设备了，本地必须留一份，否则下次连接拿不出正确的 SK 就被锁在门外。
       justProvisioned = true;
-      await saveWifiPassword(wantKey).catch(() => undefined);
+      await saveWifiPassword(savedKey).catch(() => undefined);
     }
     // 「已初始化」标记要严格得多：只有 SK&OK 或 WIFIS 真动过才算，否则下次快传会跳过这一步，
     // 拿着一把从没生效过的密码去撞同一堵墙。
     if (prov?.sk === 'ok' || prov?.confirmed) {
-      await saveWifiProvisionedKey(wantKey).catch(() => undefined);
+      await saveWifiProvisionedKey(savedKey).catch(() => undefined);
     }
     onStep?.('provision', prov?.confirmed || prov?.sk === 'ok' ? 'done' : 'failed');
+  } else if (!savedKey) {
+    client.log('[wifi] 本机没有保存过这台设备的密码，跳过自动配网——不拿共享默认值去认领设备');
   }
 
   // 3) 开热点并等到 WIFIS=2（或 1）。「开启热点」这一步到这里才真的开始——配网初始化可能

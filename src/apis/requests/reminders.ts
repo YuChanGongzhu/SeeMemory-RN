@@ -1,19 +1,24 @@
 import {baseRequest, BizError} from '../core/request';
 
 // 与 see-mem-studio-web 的 apis/requests/memory/reminders.ts 对齐：
-// 走 manager-api /app/cron（auth_token），后端按当前记忆 mode 分流云端/本地。
-// 形状以云端为准：list 返回 {items}，job 用 {prompt,kind,when}（kind: once|recurring）。
+// 走 manager-api /app/cron（auth_token）→ imemory-agent /v1/agreements（记挂簿）。
+// 形状以 imemory-agent 的 AgreementCreate/AgreementOut 为准：
+// job 用 {note,schedule_spec,status}，不是 {prompt,kind,when,enabled}。
 export type ScheduleKind = 'once' | 'recurring';
+export type AgreementStatus = 'active' | 'paused' | 'done';
+
+export type ScheduleSpec =
+  | {type: 'once'; at: string}
+  | {type: 'cron'; cron: string}
+  | {type: 'random'; gap_days: number; window?: string};
 
 export interface ScheduleJob {
   id: string;
-  name: string;
-  prompt: string;
-  kind: ScheduleKind;
-  cron: string | null;
-  fire_at: string | null;
+  status: AgreementStatus;
+  name: string | null;
+  note: string;
+  schedule_spec: ScheduleSpec;
   next_fire_at: string | null;
-  enabled: boolean;
 }
 
 export interface ListRemindersResponse {
@@ -22,19 +27,17 @@ export interface ListRemindersResponse {
 
 export interface CreateReminderParams {
   /** 到点要做/说的事（必填） */
-  prompt: string;
-  kind: ScheduleKind;
-  /** once: ISO 时间串；recurring: 5 段 cron 表达式 */
-  when: string;
-  /** 可选，留空后端从 prompt 截取 */
+  note: string;
+  schedule_spec: ScheduleSpec;
+  /** 可选，留空后端从 note 截取 */
   name?: string;
 }
 
 export interface UpdateReminderParams {
   name?: string;
-  prompt?: string;
-  when?: string;
-  enabled?: boolean;
+  note?: string;
+  schedule_spec?: ScheduleSpec;
+  status?: 'active' | 'paused';
 }
 
 function extractErrorMessage(error: unknown, fallback: string): string {
@@ -55,6 +58,14 @@ export function listReminders(): Promise<ListRemindersResponse> {
   return withErrorMessage(
     baseRequest<ListRemindersResponse>({method: 'GET', path: '/app/cron'}),
     '获取任务失败',
+  );
+}
+
+/** 单条详情：note 全文（list 里截前 100 字），编辑前拉取用。 */
+export function getReminder(id: string): Promise<ScheduleJob> {
+  return withErrorMessage(
+    baseRequest<ScheduleJob>({method: 'GET', path: `/app/cron/${id}`}),
+    '获取任务详情失败',
   );
 }
 

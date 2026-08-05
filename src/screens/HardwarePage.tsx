@@ -141,9 +141,11 @@ export function HardwarePage() {
     processingIds,
     error,
     hasPaired,
+    needsKeySetup,
     startScan,
     stopScan,
     connectAndPair,
+    cancelNewDevicePairing,
     reconnectSaved,
     disconnect,
     syncNow,
@@ -155,7 +157,8 @@ export function HardwarePage() {
     refreshStatus,
     refreshInbox,
     clearError,
-    forgetDevice,
+    unbindKey,
+    unbindAndDeleteData,
   } = useMr20();
   const playback = useAudioPlayback();
   const {userId} = useAuth();
@@ -168,7 +171,8 @@ export function HardwarePage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<Mr20InboxItem | null>(null); // 查看录音转写全文
   const [disconnectAsk, setDisconnectAsk] = useState(false);
-  const [unbindAsk, setUnbindAsk] = useState(false);
+  const [unbindKeyAsk, setUnbindKeyAsk] = useState(false);
+  const [unbindDeleteAsk, setUnbindDeleteAsk] = useState(false);
   const [alias, setAlias] = useState('');
   const [autoDownload, setAutoDownload] = useState(false); // 自动同步（设备→手机）
   // 自动转文字（同步后自动上传转写）：**默认开启**，本地无记录时按开处理。
@@ -761,7 +765,7 @@ export function HardwarePage() {
     return <DeviceSettings onBack={() => setSubPage('main')} onNavigate={setSubPage} />;
   }
   if (subPage === 'wifi') {
-    return <WifiManage onBack={() => setSubPage('settings')} />;
+    return <WifiManage onBack={() => setSubPage('settings')} autoInit={needsKeySetup} />;
   }
   if (subPage === 'deviceFiles') {
     return <DeviceFiles onBack={() => setSubPage('main')} />;
@@ -833,6 +837,24 @@ export function HardwarePage() {
             ) : (
               <Text style={st.migrateBtnText}>归入</Text>
             )}
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* 连接建立之后才查后端绑定状态（见 useMr20.checkDeviceBinding），不打断连接过程本身；
+          未绑定才出这条提示。「设置密钥」引导去 WifiManage，密钥由后端签发（见
+          issueBackendKey），WifiManage 在 autoInit 效果里回显给用户确认后才真正写进设备。 */}
+      {connected && needsKeySetup ? (
+        <View style={st.migrateBar}>
+          <View style={st.flex1}>
+            <Text style={st.migrateTitle}>这台设备还没有绑定到你的账号</Text>
+            <Text style={st.migrateSub}>设置一把专属密钥后才能正常同步和转手管理</Text>
+          </View>
+          <TouchableOpacity style={st.migrateBtn} onPress={() => setSubPage('wifi')}>
+            <Text style={st.migrateBtnText}>设置密钥</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={cancelNewDevicePairing} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+            <Text style={st.migrateSub}>暂不</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -1134,16 +1156,24 @@ export function HardwarePage() {
             <Text style={st.sheetRowText}>断开连接</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={[st.sheetCard, {marginTop: 12}]}
-          onPress={() => {
-            setMoreOpen(false);
-            setUnbindAsk(true);
-          }}>
-          <View style={st.sheetRow}>
-            <Text style={[st.sheetRowText, {color: HW.red}]}>解除设备绑定</Text>
-          </View>
-        </TouchableOpacity>
+        <View style={[st.sheetCard, {marginTop: 12}]}>
+          <TouchableOpacity
+            style={[st.sheetRow, st.sheetRowBorder]}
+            onPress={() => {
+              setMoreOpen(false);
+              setUnbindKeyAsk(true);
+            }}>
+            <Text style={[st.sheetRowText, {color: HW.red}]}>解绑密钥</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={st.sheetRow}
+            onPress={() => {
+              setMoreOpen(false);
+              setUnbindDeleteAsk(true);
+            }}>
+            <Text style={[st.sheetRowText, {color: HW.red}]}>解绑并删除数据</Text>
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity style={[st.sheetCard, {marginTop: 12}]} onPress={() => setMoreOpen(false)}>
           <View style={st.sheetRow}>
             <Text style={[st.sheetRowText, {color: HW.blue, fontWeight: '600'}]}>取消</Text>
@@ -1173,22 +1203,43 @@ export function HardwarePage() {
         ]}
       />
 
-      {/* 解除绑定确认（高危） */}
+      {/* 解绑密钥确认（高危）：设备需已连接，SK&RESET + 后端解绑，不删本机录音 */}
       <IosAlert
-        visible={unbindAsk}
-        onClose={() => setUnbindAsk(false)}
-        title="确定解除与该设备的绑定？"
+        visible={unbindKeyAsk}
+        onClose={() => setUnbindKeyAsk(false)}
+        title="确定解绑密钥？"
         titleColor={HW.red}
         icon={<AlertTriangle size={32} color={HW.red} />}
-        message="解除后将清空配对关系，无法自动连接，需重新配对才能使用。已下载到手机的录音文件不会被删除。"
+        message="设备上的密钥将被清除并与你的账号解绑，需重新设置密钥才能再次使用（含转手给其他人）。已下载到手机的录音文件不会被删除。"
         buttons={[
-          {text: '取消', onPress: () => setUnbindAsk(false)},
+          {text: '取消', onPress: () => setUnbindKeyAsk(false)},
           {
-            text: '解除绑定',
+            text: '解绑密钥',
             danger: true,
             onPress: () => {
-              setUnbindAsk(false);
-              forgetDevice().catch(() => undefined);
+              setUnbindKeyAsk(false);
+              unbindKey().catch(() => undefined);
+            },
+          },
+        ]}
+      />
+
+      {/* 解绑并删除数据确认（更高危）：在解绑密钥基础上，再清本机录音/收件箱缓存 */}
+      <IosAlert
+        visible={unbindDeleteAsk}
+        onClose={() => setUnbindDeleteAsk(false)}
+        title="确定解绑并删除数据？"
+        titleColor={HW.red}
+        icon={<AlertTriangle size={32} color={HW.red} />}
+        message="除了清除设备密钥并与账号解绑外，还会删除本机已下载的录音、收件箱和处理记录，操作不可撤销。"
+        buttons={[
+          {text: '取消', onPress: () => setUnbindDeleteAsk(false)},
+          {
+            text: '解绑并删除',
+            danger: true,
+            onPress: () => {
+              setUnbindDeleteAsk(false);
+              unbindAndDeleteData().catch(() => undefined);
             },
           },
         ]}

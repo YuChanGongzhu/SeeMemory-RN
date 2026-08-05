@@ -11,6 +11,8 @@ import {SUBSCRIPTION_ENABLED} from '../config/features';
 import {PRIVACY_POLICY_URL} from '../config/legal';
 import {HW, IosAlert} from './hardware/parts';
 import {EnvSwitchSheet} from '../ui/EnvSwitchSheet';
+import {WechatBindSheet} from '../ui/WechatBindSheet';
+import {useWechatHealth} from '../hooks/useWechatHealth';
 
 const APP_VERSION = '0.1.0';
 
@@ -23,6 +25,8 @@ export function ProfilePage() {
   const [name, setName] = useState(user?.nickname || user?.username || '薯饼');
   const account = usePoints();
   const power = account?.balancePoints ?? 0;
+  const {healthy: wechatHealthy, refresh: refreshWechat} = useWechatHealth();
+  const [wechatSheetVisible, setWechatSheetVisible] = useState(false);
 
   // 注销账号（App Store 5.1.1(v)）：两段确认 → 永久注销。
   // 不走短信验证码：码会发到正在操作的这台手机上，挡不住"拿着解锁手机的人"这个实际威胁，
@@ -103,13 +107,19 @@ export function ProfilePage() {
           )}
         </View>
 
-        {/* 微信绑定行已随「绑定微信/已绑定」占位文案一并移除：v1.0 未接微信 OAuth（见 LoginScreen），
-            显示「已绑定」是假的。接入后再恢复。 */}
         <View style={styles.card}>
-          <View style={styles.row}>
+          <View style={[styles.row, styles.rowDivider]}>
             <Text style={styles.rowLabel}>手机号</Text>
             <Text style={maskedPhone ? styles.rowValue : styles.rowValueMuted}>{maskedPhone || '未绑定'}</Text>
           </View>
+          {/* 微信绑定：待办提醒到点靠微信推送，这里是绑定入口；健康度来自 /app/wechat/status。 */}
+          <TouchableOpacity style={styles.row} onPress={() => setWechatSheetVisible(true)}>
+            <Text style={styles.rowLabel}>微信</Text>
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+              <Text style={wechatHealthy ? styles.rowValue : styles.rowValueMuted}>{wechatHealthy ? '已绑定' : '未绑定'}</Text>
+              <ChevronRight size={16} color={colors.textSub} />
+            </View>
+          </TouchableOpacity>
         </View>
 
         {SUBSCRIPTION_ENABLED ? (
@@ -195,6 +205,15 @@ export function ProfilePage() {
       />
 
       <EnvSwitchSheet visible={showEnv} onClose={() => setShowEnv(false)} />
+
+      <WechatBindSheet
+        visible={wechatSheetVisible}
+        onClose={() => {
+          setWechatSheetVisible(false);
+          void refreshWechat();
+        }}
+        onBound={() => void refreshWechat()}
+      />
     </View>
   );
 }

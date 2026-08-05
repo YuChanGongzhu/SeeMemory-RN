@@ -32,7 +32,14 @@ type WifiState = 'off' | 'turning_on' | 'on' | 'turning_off';
  */
 type PwdMode = 'save' | 'init' | 'diagnose' | 'resetDiagnose' | 'joinTest';
 
-export function WifiManage({onBack}: {onBack: () => void}) {
+export function WifiManage({
+  onBack,
+  autoInit,
+}: {
+  onBack: () => void;
+  /** 从「设置密钥」提示进来的空白设备：一进页面就向后端申请密钥并回显给用户确认。 */
+  autoInit?: boolean;
+}) {
   const {
     connState,
     openHotspot,
@@ -43,6 +50,7 @@ export function WifiManage({onBack}: {onBack: () => void}) {
     resetHotspotKey,
     diagnoseWifiSetup,
     testHotspotJoin,
+    issueBackendKey,
     logs,
   } = useMr20();
   const [wifiState, setWifiState] = useState<WifiState>('off');
@@ -63,8 +71,25 @@ export function WifiManage({onBack}: {onBack: () => void}) {
   const [diagLines, setDiagLines] = useState<string[]>([]);
   const [diagRunning, setDiagRunning] = useState(false);
   const diagBoxRef = useRef<ScrollView | null>(null);
+  // 空白设备首次设密钥：后端签发的密钥回显在这里，等用户确认后才真正写进设备。
+  const [autoInitKey, setAutoInitKey] = useState<string | null>(null);
+  const autoInitTriedRef = useRef(false);
 
   const busy = wifiState === 'turning_on' || wifiState === 'turning_off';
+
+  // 从「设置密钥」提示进来（autoInit）：连上之后立刻向后端申请密钥，不需要用户自己想密码。
+  // 每次进页面只试一次（autoInitTriedRef），避免 connState 抖动/重渲染反复发请求。
+  useEffect(() => {
+    if (!autoInit || autoInitTriedRef.current || connState !== 'connected') {
+      return;
+    }
+    autoInitTriedRef.current = true;
+    issueBackendKey().then(key => {
+      if (key) {
+        setAutoInitKey(key);
+      }
+    });
+  }, [autoInit, connState, issueBackendKey]);
 
   // 进页面读一次真实热点状态/凭据，之后每 5s 复读一次（状态 1/2 视为已开）。
   //
@@ -571,6 +596,33 @@ export function WifiManage({onBack}: {onBack: () => void}) {
           />
         </View>
       </IosAlert>
+
+      {/* 空白设备首次设密钥：密钥是后端签发的，这里只回显+确认，不给自定义输入框——
+          不满意可以确认完成后再用下面「重置密钥后重新配网」改成自己想要的。 */}
+      <IosAlert
+        visible={autoInitKey !== null}
+        onClose={() => setAutoInitKey(null)}
+        title="设置设备密钥"
+        message={
+          `已为这台设备生成密钥：${autoInitKey ?? ''}\n\n` +
+          '首次配对需要用这把密钥完成初始化（约 1 分半，请让设备保持开机并放在手机旁边）。' +
+          '完成后可以随时在下方「重置密钥后重新配网」里改成你自己的密码。'
+        }
+        buttons={[
+          {text: '取消', onPress: () => setAutoInitKey(null)},
+          {
+            text: '开始设置',
+            bold: true,
+            onPress: () => {
+              const key = autoInitKey;
+              setAutoInitKey(null);
+              if (key) {
+                runDiagnose(key, true);
+              }
+            },
+          },
+        ]}
+      />
     </View>
   );
 }

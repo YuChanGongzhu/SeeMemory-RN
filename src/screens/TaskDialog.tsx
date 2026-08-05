@@ -1,6 +1,5 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet} from 'react-native';
-import {Bell, BellOff} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {BottomSheet} from '../ui/BottomSheet';
 import {
@@ -9,10 +8,13 @@ import {
   type CreateReminderParams,
   type ScheduleJob,
   type ScheduleKind,
+  type ScheduleSpec,
   type UpdateReminderParams,
 } from '../apis/requests/reminders';
 
-// 与 see-mem-studio-web 的 task-dialog.tsx 对齐：once → ISO 时间；recurring → 5 段 cron。
+// 与 see-mem-studio-web 的 task-dialog.tsx 对齐：once → schedule_spec{type:'once',at}（北京墙上时间
+// "YYYY-MM-DD HH:mm"，无时区串）；recurring → schedule_spec{type:'cron',cron}（5 段 cron）。
+// 启用/停用状态在列表页的开关里改（PATCH {status}），这里不重复维护。
 // RN 无 datetime/cron 原生控件，这里用纯输入/选择器实现，输出形状一致。
 
 type CronFrequency = 'daily' | 'weekly' | 'monthly';
@@ -75,13 +77,18 @@ const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const toDateStr = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const toTimeStr = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
-// once 输入按设备本地时区解读，转 UTC ISO（与 web 的 dayjs.tz(...).toISOString() 等价于本地用户）。
-const onceToIso = (dateStr: string, timeStr: string): string | null => {
+// schedule_spec.once.at 按「北京墙上时间，无时区串」存（与 web 的 toOnceAt 对齐）；
+// 不做时区换算，直接拼接用户填的日期/时间。
+const onceToAt = (dateStr: string, timeStr: string): string | null => {
   if (!DATE_RE.test(dateStr) || !TIME_RE.test(timeStr)) return null;
-  const [y, mo, da] = dateStr.split('-').map(Number);
-  const [h, mi] = timeStr.split(':').map(Number);
-  const d = new Date(y, mo - 1, da, h, mi, 0, 0);
-  return isNaN(d.getTime()) ? null : d.toISOString();
+  return `${dateStr} ${timeStr}`;
+};
+
+const parseOnceAt = (at: string): Date | null => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(at);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0);
+  return isNaN(d.getTime()) ? null : d;
 };
 
 const defaultOnce = () => {
@@ -101,7 +108,7 @@ interface Props {
 
 export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
   const [name, setName] = useState('');
-  const [prompt, setPrompt] = useState('');
+  const [note, setNote] = useState('');
   const [kind, setKind] = useState<ScheduleKind>('once');
   const [onceDate, setOnceDate] = useState('');
   const [onceTime, setOnceTime] = useState('');
@@ -111,7 +118,6 @@ export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
   const [monthday, setMonthday] = useState(1);
   const [cronAdvanced, setCronAdvanced] = useState(false);
   const [cronText, setCronText] = useState(buildCron('daily', DEFAULT_TIME, 1, 1));
-  const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -131,35 +137,36 @@ export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
     setOnceTime(def.time);
 
     if (task) {
-      setName(task.name);
-      setPrompt(task.prompt ?? '');
-      setKind(task.kind);
-      setEnabled(task.enabled);
-      if (task.kind === 'once') {
-        const d = task.fire_at ? new Date(task.fire_at) : null;
-        if (d && !isNaN(d.getTime())) {
+      setName(task.name ?? '');
+      setNote(task.note ?? '');
+      const spec = task.schedule_spec;
+      if (spec.type === 'once') {
+        setKind('once');
+        const d = parseOnceAt(spec.at);
+        if (d) {
           setOnceDate(toDateStr(d));
           setOnceTime(toTimeStr(d));
         }
         return;
       }
-      const parsed = parseCron(task.cron ?? '');
+      setKind('recurring');
+      const cronExpr = spec.type === 'cron' ? spec.cron : '';
+      const parsed = parseCron(cronExpr);
       if (parsed) {
         setFrequency(parsed.frequency);
         setTimeOfDay(parsed.time);
         setWeekday(parsed.weekday);
         setMonthday(parsed.monthday);
-        setCronText(task.cron ?? '');
+        setCronText(cronExpr);
       } else {
         setCronAdvanced(true);
-        setCronText(task.cron || buildCron('daily', DEFAULT_TIME, 1, 1));
+        setCronText(cronExpr || buildCron('daily', DEFAULT_TIME, 1, 1));
       }
       return;
     }
     setName('');
-    setPrompt('');
+    setNote('');
     setKind('once');
-    setEnabled(true);
   }, [visible, task]);
 
   const cronPreview = useMemo(
@@ -184,53 +191,47 @@ export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
   };
 
   const submit = async () => {
-    const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt) {
+    const trimmedNote = note.trim();
+    if (!trimmedNote) {
       setError('请输入提醒内容');
       return;
     }
     const trimmedName = name.trim();
 
-    let whenValue: string;
+    let scheduleSpec: ScheduleSpec;
     if (kind === 'once') {
-      const iso = onceToIso(onceDate, onceTime);
-      if (!iso) {
+      const at = onceToAt(onceDate, onceTime);
+      if (!at) {
         setError('一次性任务时间格式不正确（日期 YYYY-MM-DD，时间 HH:mm）');
         return;
       }
-      whenValue = iso;
+      scheduleSpec = {type: 'once', at};
     } else if (cronAdvanced) {
-      whenValue = cronText.trim();
-      if (whenValue.split(/\s+/).length !== 5) {
+      const cron = cronText.trim();
+      if (cron.split(/\s+/).length !== 5) {
         setError('Cron 表达式需为 5 段，例如 0 9 * * *');
         return;
       }
+      scheduleSpec = {type: 'cron', cron};
     } else {
       if (!TIME_RE.test(timeOfDay)) {
         setError('请填写正确的提醒时间（HH:mm）');
         return;
       }
-      whenValue = buildCron(frequency, timeOfDay, weekday, monthday);
+      scheduleSpec = {type: 'cron', cron: buildCron(frequency, timeOfDay, weekday, monthday)};
     }
+
+    // 云端 name 必填：留空则从内容截取。
+    const finalName = trimmedName || trimmedNote.slice(0, 30);
 
     setError('');
     setSaving(true);
     try {
       if (mode === 'create') {
-        const body: CreateReminderParams = {
-          prompt: trimmedPrompt,
-          kind,
-          when: whenValue,
-          ...(trimmedName ? {name: trimmedName} : {}),
-        };
+        const body: CreateReminderParams = {note: trimmedNote, schedule_spec: scheduleSpec, name: finalName};
         await createReminder(body);
       } else if (task) {
-        const body: UpdateReminderParams = {
-          prompt: trimmedPrompt,
-          when: whenValue,
-          ...(trimmedName ? {name: trimmedName} : {}),
-          ...(kind === 'recurring' ? {enabled} : {}),
-        };
+        const body: UpdateReminderParams = {note: trimmedNote, schedule_spec: scheduleSpec, name: finalName};
         await updateReminder(task.id, body);
       }
       onSaved();
@@ -258,8 +259,8 @@ export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
           style={styles.field}
           placeholder="到点要做/说的事，例如：提醒我喝水"
           placeholderTextColor={colors.textSub}
-          value={prompt}
-          onChangeText={setPrompt}
+          value={note}
+          onChangeText={setNote}
         />
 
         <Text style={styles.label}>名称（可选）</Text>
@@ -363,18 +364,6 @@ export function TaskDialog({visible, mode, task, onClose, onSaved}: Props) {
           </>
         )}
 
-        {mode === 'edit' && kind === 'recurring' ? (
-          <>
-            <Text style={styles.label}>启用状态</Text>
-            <TouchableOpacity
-              style={[styles.enabledBtn, {backgroundColor: enabled ? colors.primary : colors.bgSecondary}]}
-              onPress={() => setEnabled(v => !v)}>
-              {enabled ? <Bell size={16} color="#fff" /> : <BellOff size={16} color={colors.textMain} />}
-              <Text style={{fontWeight: '600', color: enabled ? '#fff' : colors.textMain}}>{enabled ? '启用' : '停用'}</Text>
-            </TouchableOpacity>
-          </>
-        ) : null}
-
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.actions}>
@@ -399,7 +388,6 @@ const styles = StyleSheet.create({
   row: {flexDirection: 'row', gap: 10, alignItems: 'center'},
   wrapRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
   chip: {paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill},
-  enabledBtn: {flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 14},
   error: {color: '#E5484D', fontSize: 13, marginTop: 14},
   actions: {flexDirection: 'row', gap: 12, marginTop: 22},
   btn: {flex: 1, borderRadius: 16, paddingVertical: 15, alignItems: 'center'},

@@ -20,12 +20,7 @@ import {
   Mr20Status,
 } from '../native/mr20/Mr20Client';
 import {isMr20NativeAvailable, isMr20WifiAvailable} from '../native/mr20/Mr20Native';
-import {
-  MR20_KEY_LEN,
-  MR20_PAIR_KEY,
-  isValidDeviceKey,
-  toDeviceKey,
-} from '../native/mr20/protocol';
+import {MR20_KEY_LEN, isValidDeviceKey, toDeviceKey} from '../native/mr20/protocol';
 import {
   runHotspotJoinTest,
   runWifiSetupDiagnostic,
@@ -90,6 +85,16 @@ import {
 import {setMr20Scope} from '../services/mr20Scope';
 import {useAuth} from '../auth/AuthContext';
 import {useAIConsent} from '../privacy/AIConsentContext';
+import {BizError} from '../apis/core/request';
+import {
+  bindDevice,
+  listMyDevices,
+  unbindDevice,
+  updateDeviceKey,
+  DEVICE_ALREADY_BOUND,
+  DEVICE_BOUND_BY_OTHER,
+  type UserDeviceVO,
+} from '../apis/requests/deviceBinding';
 
 /** WiFi 快传整体阶段。 */
 export type WifiPhase =
@@ -155,10 +160,19 @@ interface Mr20ContextType {
   error: string | null;
   logs: string[];
   hasPaired: boolean;
+  // 连接成功后台后台查了一次后端绑定状态，这台设备还没绑定到当前账号——
+  // 不影响已经建立的 BLE 连接，UI 拿这个提示引导用户去 WifiManage 用「重置密钥后重新配网」
+  // 设置密钥；密钥设置成功（resetFirst 自检 report.ok）后会自动登记到后端，见 diagnoseWifiSetup。
+  needsKeySetup: boolean;
   // 动作
   startScan: () => Promise<void>;
   stopScan: () => void;
   connectAndPair: (deviceId: string, name: string) => Promise<void>;
+  // 用户不想现在设置：只清提示，不断开连接，下次重连还会再提示一次。
+  cancelNewDevicePairing: () => void;
+  // 空白设备首次设密钥：向后端登记这台设备并拿回它签发的密钥（不接受客户端自定义值），
+  // 拿到后交给 diagnoseWifiSetup(resetFirst) 写进设备。失败返回 null，错误已写进 error。
+  issueBackendKey: () => Promise<string | null>;
   // 自动/手动重连上一次配对过的设备（静默扫描→匹配 id→连接）。首页用。
   // force=true 用于用户手动「重新连接」，绕过「每会话只自动一次」的门控。
   reconnectSaved: (force?: boolean) => Promise<void>;
@@ -253,6 +267,10 @@ interface Mr20ContextType {
   ) => Promise<void>;
   forgetDevice: () => Promise<void>;
   factoryReset: () => Promise<void>;
+  // 解绑密钥：设备侧 SK&RESET + 后端解绑，不动本机已下载的录音/收件箱数据。
+  unbindKey: () => Promise<void>;
+  // 解绑并删除数据：在 unbindKey 基础上，再清掉本机的录音/收件箱/批处理缓存。
+  unbindAndDeleteData: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -282,9 +300,12 @@ const Mr20Context = createContext<Mr20ContextType>({
   error: null,
   logs: [],
   hasPaired: false,
+  needsKeySetup: false,
   startScan: noop,
   stopScan: () => {},
   connectAndPair: noop,
+  cancelNewDevicePairing: () => {},
+  issueBackendKey: async () => null,
   reconnectSaved: noop,
   clearPairing: noop,
   disconnect: noop,
@@ -338,6 +359,8 @@ const Mr20Context = createContext<Mr20ContextType>({
   runOtaWifi: noop,
   forgetDevice: noop,
   factoryReset: noop,
+  unbindKey: noop,
+  unbindAndDeleteData: noop,
   clearError: () => {},
 });
 
@@ -351,40 +374,82 @@ const MAX_LOGS = 200;
  *   设备需要厂商的出厂密钥，或让厂商关掉预绑定，App 侧无法绕过。
  * - 超时：设备没开机 / 太远 / 不在范围。
  */
+/**
+ * 候选密钥依次去认证——**不再兜底内置共享密钥 MR20_PAIR_KEY**。后端是密钥的唯一标准，
+ * 所以候选顺序按"新鲜度"排：
+ *   1. 本机已经知道这台设备是谁（`getPairedDevice().mac` 对得上）时，后端那条记录当前
+ *      的 `accessKey`——这是最新值，即使密钥被别的手机改过，这里也能拿到改后的。
+ *   2. 当前账号名下其它设备登记过的密钥——覆盖"换新手机/本地数据被清、不知道这是哪台
+ *      设备"的场景，只能挨个试。
+ *   3. 本机缓存的旧密码——**只在后端查不到（离线/未登录）时**才用得上，纯粹是兜底，
+ *      不会排在后端最新值前面，避免用一个可能已经过期的本地值抢答。
+ *
+ * 厂商确认：这批设备出厂时蓝牙裸连（GATT）本来就不需要密钥，probe 应该直接有应答；
+ * probe 失败说明这台设备已经被某把密钥"认领"过。继续拿一个 App 内置、所有设备共享的
+ * 固定值去自动认证，等于自动把它也焊死在这把共享值上——这正是过去设备被"认领"成共享默认
+ * 密钥的真正机制（`SK&<任意值>` 在设备当前没有密钥时会被当场原样接受），也是这条候选被
+ * 从这里删掉的原因。
+ *
+ * 换后台候选而不是共享密钥，是因为这批候选**只来自当前登录账号自己名下的设备**，不是
+ * 全 App 共享的固定值，不会把陌生设备焊死成同一把密钥。SK&ERR 是设备主动拒绝的应答
+ * （不是超时），可以放心连续试下一个候选。认证成功后核对一下 MAC 是否正好对应后端那条
+ * 记录，对得上才把这把密钥缓存到本机——避免"两台不同设备刚好选了同一个密码"这种小概率
+ * 巧合被误当成"就是那台记录里的设备"长期记到本地。见 [[mr20-account-binding-flow]]。
+ */
 async function authenticateOrGuide(client: Mr20Client): Promise<void> {
-  // 候选密钥：**用户自己设过的排第一**，内置的 MR20_PAIR_KEY 兜底。
-  // 用户在「配网自检 / 初始化热点密码」里设的密钥同时也是 SK 绑定密钥（协议 0801），
-  // 若该固件开着密钥校验，重连时只发内置密钥必然 SK&ERR —— 等于用户一改密码就再也连不上。
   const saved = await getWifiPassword().catch(() => null);
-  const candidates = [saved, MR20_PAIR_KEY].filter(
-    (k, i, a): k is string => Boolean(k) && a.indexOf(k) === i,
-  );
+  const pairedMac = (await getPairedDevice().catch(() => null))?.mac || null;
+  let backendDevices: UserDeviceVO[] = [];
+  let backendReachable = true;
   try {
-    let lastErr: unknown = null;
-    for (const key of candidates) {
-      try {
-        await client.authenticate(key);
-        return;
-      } catch (e) {
-        lastErr = e;
-        // SK&ERR 才值得换下一把；超时/断链换密钥也没用，直接冒泡。
-        if (String((e as Error)?.message || e) !== 'SK_ERR') {
-          throw e;
-        }
+    backendDevices = await listMyDevices();
+  } catch {
+    // 查询失败（离线/未登录）：候选只能退回本机缓存的旧密码。
+    backendReachable = false;
+  }
+  const candidates: string[] = [];
+  if (backendReachable) {
+    const known = pairedMac ? backendDevices.find(d => d.uid === pairedMac) : null;
+    if (known?.accessKey) {
+      candidates.push(known.accessKey);
+    }
+    for (const d of backendDevices) {
+      if (d.accessKey && !candidates.includes(d.accessKey)) {
+        candidates.push(d.accessKey);
       }
     }
-    throw lastErr;
-  } catch (e) {
-    const msg = String((e as Error)?.message || e);
-    if (msg === 'SK_ERR') {
-      throw new Error(
-        '设备拒绝了密钥（SK&ERR），且对裸连只读指令也不应答 —— 它被另一把密钥绑定了。' +
-          'App 的「清除配对」(BLE&RESET) 在未鉴权时会被固件忽略，长按恢复出厂也可能因出厂' +
-          '预绑定而无效。请向厂商确认这台 YLF20 的出厂密钥，或让其关闭出厂预绑定。',
-      );
-    }
-    throw new Error('设备未响应，请确认记忆粒已开机并贴近手机后重试。');
   }
+  if (saved && !candidates.includes(saved)) {
+    candidates.push(saved);
+  }
+  if (candidates.length === 0) {
+    throw new Error(
+      '设备对裸连只读指令没有应答，且本机没有保存过密钥、账号名下也没有登记过设备，无法自动重连。' +
+        '如果这是你自己的设备，请到「WiFi 管理」用「重置密钥后重新配网」设置一个新密码；' +
+        '如果不是，说明它已经被别的账号占用了。',
+    );
+  }
+  for (const key of candidates) {
+    try {
+      await client.authenticate(key);
+      const mac = await client.getMac().catch(() => '');
+      const matchesBackendRecord = backendDevices.some(d => d.accessKey === key && d.uid === mac);
+      if (matchesBackendRecord || key === saved) {
+        await saveWifiPassword(key).catch(() => undefined);
+      }
+      return;
+    } catch (e) {
+      const msg = String((e as Error)?.message || e);
+      if (msg !== 'SK_ERR') {
+        throw new Error('设备未响应，请确认记忆粒已开机并贴近手机后重试。');
+      }
+      // SK_ERR：设备主动拒绝，换下一个候选再试。
+    }
+  }
+  throw new Error(
+    '设备拒绝了本机保存的密钥及账号名下所有登记过的密钥（SK&ERR）—— 它现在绑的是另一把密钥。' +
+      '请到「WiFi 管理」用「重置密钥后重新配网」重新设置。',
+  );
 }
 
 export function Mr20Provider({children}: {children: React.ReactNode}) {
@@ -423,6 +488,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [hasPaired, setHasPaired] = useState(false);
+  const [needsKeySetup, setNeedsKeySetup] = useState(false);
+  // 记「已经为这个 deviceId 查过一次后端绑定状态」，防止 connState 抖动/重渲染
+  // 触发 checkDeviceBinding 的 effect 反复发请求；换一台设备/重新连接会换新 id 自然重查。
+  const bindCheckedRef = useRef<string | null>(null);
   // OTA 进行中：独占 BLE，期间不刷新状态/不扫描/不自动重连（协议要求 OTA 期间禁发其他指令）。
   const [otaActive, setOtaActive] = useState(false);
   const otaActiveRef = useRef(false);
@@ -578,8 +647,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
           await authenticateOrGuide(client);
         }
 
-        // 记的密钥同样以用户设过的为准，与 authenticateOrGuide 的候选顺序保持一致。
-        const usedKey = (await getWifiPassword().catch(() => null)) || MR20_PAIR_KEY;
+        // 记的密钥同样以用户设过的为准，不再兜底共享默认值——openWithoutKey 时设备当前
+        // 确实没有生效的密钥，记一个假的 MR20_PAIR_KEY 反而是错误信息（见 authenticateOrGuide
+        // 上方注释）。真没有就存空字符串，等用户走「重置密钥后重新配网」再补上真值。
+        const usedKey = (await getWifiPassword().catch(() => null)) || '';
         await savePairedDevice({id: deviceId, name, key: usedKey});
         setHasPaired(true);
         client.syncTime().catch(() => undefined);
@@ -620,7 +691,152 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     setConnectedDevice(null);
     setRecording(null);
     setDeviceFiles(null);
+    // 断开后清掉「已查过绑定状态」的记号——下次（哪怕是同一台设备）重连都要重新查一次，
+    // 尤其是解绑之后：不清的话 bindCheckedRef 还记着旧 id，checkDeviceBinding 会误判成
+    // 「查过了」直接跳过，永远不会再提示设置密钥。
+    bindCheckedRef.current = null;
   }, []);
+
+  /**
+   * 连接建立**之后**才查后端绑定状态——不掺进 connectAndPair 的握手过程，连接本身完全
+   * 按老路径走（探测/候选密钥，谁也不碰），避免在设备还没真正连稳时就抢发 SK 指令。
+   * 未绑定才提示 needsKeySetup；已绑定或读不到 mac（极少数固件没实现 MAC 指令）就不打扰。
+   */
+  const checkDeviceBinding = useCallback(async (deviceId: string) => {
+    if (bindCheckedRef.current === deviceId) {
+      return;
+    }
+    bindCheckedRef.current = deviceId;
+    const client = clientRef.current;
+    if (!client || client.state !== 'connected') {
+      return;
+    }
+    const mac = await client.getMac().catch(() => '');
+    if (!mac) {
+      return;
+    }
+    try {
+      const mine = await listMyDevices();
+      if (!mine.some(d => d.uid === mac)) {
+        setNeedsKeySetup(true);
+      }
+    } catch {
+      // 查询本身失败（网络/未登录等）不影响正常使用，安静放弃，不提示。
+    }
+  }, []);
+
+  /**
+   * 空白设备首次设密钥：密钥由后端签发，不再让用户在这一步自己手输——`bind()` 不带
+   * `accessKey`，服务端随机生成落库并把它带回来。App 把这把密钥回显给用户，用户确认后
+   * 交给 `diagnoseWifiSetup(key, ..., {resetFirst: true})` 走完整协议真正写进设备。
+   * 用户事后不满意这把密钥，走「重置密钥后重新配网」输入自己想要的值即可——那条路径
+   * 走完会经 `syncDeviceKey` 把新值同步回后端，不需要在这一步给"自定义密钥"开口子。
+   */
+  const issueBackendKey = useCallback(async (): Promise<string | null> => {
+    const client = clientRef.current;
+    const dev = client?.currentDevice;
+    if (!client || !dev) {
+      return null;
+    }
+    const mac = await client.getMac().catch(() => '');
+    const uid = mac || dev.id;
+    if (!uid) {
+      return null;
+    }
+    try {
+      const vo = await bindDevice({uid, type: 'recorder', model: 'MR20'});
+      return vo.accessKey;
+    } catch (e) {
+      if (e instanceof BizError && e.code === DEVICE_ALREADY_BOUND) {
+        // 上次生成过密钥但没走完写入这一步就退出了：查列表把同一把取回来，不重新生成，
+        // 否则用户会看到"密钥变了"，且旧密钥万一已经写进设备就对不上了。
+        const mine = await listMyDevices().catch(() => []);
+        return mine.find(d => d.uid === uid)?.accessKey || null;
+      }
+      setError(
+        e instanceof BizError && e.code === DEVICE_BOUND_BY_OTHER
+          ? '这台设备已被其他账号绑定，请联系原机主先解绑。'
+          : `向后端申请设备密钥失败（${String((e as Error)?.message || e)}），请重试`,
+      );
+      return null;
+    }
+  }, []);
+
+  /**
+   * 设备密钥已经通过 `diagnoseWifiSetup`（resetFirst）成功设置/确认之后，补一次后端登记，
+   * 把 App 刚写进设备的这把 key 带上去——后端落库的就是这个值，不再是它自己随机生成的那把。
+   * 不再自己发任何 BLE 指令——密钥怎么设、走不走 resetFirst，完全交给已经在真机上验证过的
+   * 配网自检流程决定（用户原话："要让用户输入密码再进行完整的那个协议流程"），这里只做
+   * "把已经生效的密钥记到后端" 这一件事，失败也不倒推设备侧的成功。
+   */
+  const registerDeviceBinding = useCallback(async (key: string) => {
+    const client = clientRef.current;
+    const dev = client?.currentDevice;
+    if (!client || !dev) {
+      return;
+    }
+    const mac = await client.getMac().catch(() => '');
+    const uid = mac || dev.id;
+    try {
+      await bindDevice({uid, type: 'recorder', model: 'MR20', accessKey: key});
+    } catch (e) {
+      if (e instanceof BizError && e.code === DEVICE_ALREADY_BOUND) {
+        // 已绑在自己名下（如上一次登记网络重试）：改成同步密钥，保证后端记的还是
+        // 设备上当前真正生效的这把。
+        await updateDeviceKey(uid, key).catch(() => undefined);
+      } else {
+        setError(
+          e instanceof BizError && e.code === DEVICE_BOUND_BY_OTHER
+            ? '设备密钥已设置成功，但这台设备的后端记录显示被其他账号绑定，请联系原机主处理。'
+            : `设备密钥已设置成功，但后端绑定登记未同步（${String((e as Error)?.message || e)}），可稍后重试`,
+        );
+      }
+    }
+    await savePairedDevice({id: dev.id, name: dev.name, mac, key});
+    setNeedsKeySetup(false);
+  }, []);
+
+  /**
+   * 已绑定设备改密后同步：跟 {@link registerDeviceBinding} 是同一件"把生效密钥记到后端"的
+   * 事，区别只是这台设备本来就已经绑在自己名下（不走 `bindDevice`，直接 PUT 改密接口）。
+   */
+  const syncDeviceKey = useCallback(async (key: string) => {
+    const client = clientRef.current;
+    const dev = client?.currentDevice;
+    if (!client || !dev) {
+      return;
+    }
+    const mac = await client.getMac().catch(() => '');
+    const uid = mac || dev.id;
+    if (!uid) {
+      return;
+    }
+    try {
+      await updateDeviceKey(uid, key);
+    } catch (e) {
+      setError(
+        `密钥已在设备上生效，但后端记录同步失败（${String((e as Error)?.message || e)}），可稍后重试`,
+      );
+    }
+    await savePairedDevice({id: dev.id, name: dev.name, mac, key});
+  }, []);
+
+  /** 用户暂时不想设置：只收起提示，不影响已经建立的连接；下次重连会再查一次再提示。 */
+  const cancelNewDevicePairing = useCallback(() => {
+    setNeedsKeySetup(false);
+  }, []);
+
+  // 连接一旦建立就顺带查一次后端绑定状态——不掺进连接过程本身，纯粹是连上之后的
+  // 后台核对，查询失败/迟到都不影响已经在用的设备。
+  useEffect(() => {
+    if (connState !== 'connected') {
+      return;
+    }
+    const dev = clientRef.current?.currentDevice;
+    if (dev) {
+      checkDeviceBinding(dev.id).catch(() => undefined);
+    }
+  }, [connState, checkDeviceBinding]);
 
   const refreshInbox = useCallback(async () => {
     setInbox(await getInbox());
@@ -882,14 +1098,28 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
         //
         // 一度在这里把 wifiPwd 也清了，理由是「密钥都重置了，旧密码没意义」。那会开出一个
         // 能把设备锁死的窗口：SK 把新密钥写进去了、WIFI&CH 那步却失败提前 return，此时设备
-        // 上有一把密钥而手机上一个都没有 —— 下次连接 authenticateOrGuide 只剩 MR20_PAIR_KEY
-        // 可试，必然 SK&ERR，而解绑用的 SK&RESET 在未鉴权时又可能被固件忽略。
+        // 上有一把密钥而手机上一个都没有 —— authenticateOrGuide 不再兜底任何共享默认密钥
+        // （见其函数注释），本机没存密码就直接判定「无法自动重连」，用户会被卡在门外。
         // 旧密码留着最多是多试一个候选，代价小得多。
         await clearWifiProvisionedKey().catch(() => undefined);
       }
-      return runWifiSetupDiagnostic(client, key, onLine, opts);
+      const report = await runWifiSetupDiagnostic(client, key, onLine, opts);
+      // 自检确认密钥真的生效了（WIFIS 走到过 6，report.ok）才同步后端，不追加任何新的
+      // BLE 指令，纯粹是自检成功之后的收尾：
+      // - needsKeySetup：这台设备之前后端核对是「未绑定」的，首次登记。
+      // - 否则只有 resetFirst（真的重置改密了）才同步新密钥；不带 resetFirst 的自检只是
+      //   验证已有密钥能不能用，没有变化，不用碰后端。
+      if (report.ok) {
+        const finalKey = report.pwd || key;
+        if (needsKeySetup) {
+          await registerDeviceBinding(finalKey).catch(() => undefined);
+        } else if (opts.resetFirst) {
+          await syncDeviceKey(finalKey).catch(() => undefined);
+        }
+      }
+      return report;
     },
-    [connState],
+    [connState, needsKeySetup, registerDeviceBinding, syncDeviceKey],
   );
 
   /**
@@ -1633,6 +1863,43 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     await disconnect();
   }, [disconnect]);
 
+  /**
+   * 解绑密钥：设备侧 `SK&RESET`（清掉设备上的绑定密钥，当场断开 BLE）+ 后端软删绑定关系。
+   * 不清本机已下载的录音/收件箱数据。`disconnect()` 里会清掉 `bindCheckedRef`，所以下次
+   * 任何人（含本人）重连这台设备，`checkDeviceBinding` 都会重新查一次后端、重新提示设置密钥。
+   */
+  const unbindKey = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      throw new Error('请先连接设备蓝牙');
+    }
+    setError(null);
+    const paired = await getPairedDevice();
+    const uid = paired?.mac || status.mac || paired?.id || '';
+    // 写指令本身失败（如链路当场断了）就不清本地状态——不确定设备上的密钥有没有真的被清掉，
+    // 留着本地记录至少还能按老密钥重连一次重试，比留一个「本机以为没配对、设备却还锁着」的
+    // 假态更安全。
+    await client.resetDeviceKey();
+    await clearWifiPassword().catch(() => undefined);
+    await clearWifiProvisionedKey().catch(() => undefined);
+    await clearPairedDevice();
+    setHasPaired(false);
+    await disconnect();
+    if (uid) {
+      // 设备侧已经清掉了，后端软删失败不该把用户卡住——记错误，用户可再解绑一次重试
+      // （UserDeviceManager.unbind 按 uid 查当前有效行，天然幂等）。
+      await unbindDevice(uid).catch(e => {
+        setError(`设备密钥已清除，但后端解绑记录未同步（${String((e as Error)?.message || e)}），可稍后重试`);
+      });
+    }
+  }, [connState, status, disconnect]);
+
+  /** 解绑并删除数据：在 unbindKey 基础上，再清本机录音/收件箱/批处理缓存（不可逆）。 */
+  const unbindAndDeleteData = useCallback(async () => {
+    await unbindKey();
+    await clearLocalCache();
+  }, [unbindKey, clearLocalCache]);
+
   const value: Mr20ContextType = {
     screenOpen,
     openScreen: () => setScreenOpen(true),
@@ -1658,9 +1925,12 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     error,
     logs,
     hasPaired,
+    needsKeySetup,
     startScan,
     stopScan,
     connectAndPair,
+    cancelNewDevicePairing,
+    issueBackendKey,
     reconnectSaved,
     clearPairing,
     disconnect,
@@ -1702,6 +1972,8 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     runOtaWifi,
     forgetDevice,
     factoryReset,
+    unbindKey,
+    unbindAndDeleteData,
     clearError: () => setError(null),
   };
 

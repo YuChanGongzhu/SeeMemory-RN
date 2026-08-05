@@ -1,37 +1,40 @@
 import React, {useEffect, useState} from 'react';
 import {View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {ChevronLeft, Plus, Bell, Clock, PenLine, Trash2} from 'lucide-react-native';
+import {ChevronLeft, Plus, Bell, Clock, PenLine, Trash2, MessageCircleWarning} from 'lucide-react-native';
 import {colors, radius} from '../design/tokens';
 import {useWriteGate} from '../hooks/useWriteGate';
+import {useWechatHealth} from '../hooks/useWechatHealth';
 import {useNav} from '../navigation/nav';
-import {listReminders, deleteReminder, updateReminder, type ScheduleJob} from '../apis/requests/reminders';
+import {listReminders, deleteReminder, getReminder, updateReminder, type ScheduleJob} from '../apis/requests/reminders';
 import {TaskDialog} from './TaskDialog';
+import {WechatBindSheet} from '../ui/WechatBindSheet';
 import type {Todo} from '../types/memory';
 
 const FILTERS = ['全部', '一次性', '周期性'] as const;
 
-/** once 显示执行时间(MM/DD HH:mm)，recurring 显示 cron。 */
+/** once 显示执行时间(MM/DD HH:mm)，cron 显示表达式，random 显示间隔窗口。 */
 function formatWhen(j: ScheduleJob): string {
-  if (j.kind === 'once') {
-    if (!j.fire_at) return '-';
-    const d = new Date(j.fire_at);
-    if (isNaN(d.getTime())) return j.fire_at;
+  const spec = j.schedule_spec;
+  if (spec.type === 'once') {
+    const d = new Date(spec.at);
+    if (isNaN(d.getTime())) return spec.at || '-';
     const p = (n: number) => String(n).padStart(2, '0');
     return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  return j.cron || '-';
+  if (spec.type === 'cron') return spec.cron || '-';
+  return spec.window ? `随机 · ${spec.window}` : '随机';
 }
 
 function toTodo(j: ScheduleJob): Todo {
   return {
     id: j.id,
-    title: j.name,
-    description: j.prompt || '',
-    type: j.kind === 'recurring' ? '周期性' : '一次性',
+    title: j.name || j.note,
+    description: j.note || '',
+    type: j.schedule_spec.type === 'once' ? '一次性' : '周期性',
     time: formatWhen(j),
     source: 'App',
-    enabled: j.enabled !== false,
+    enabled: j.status === 'active',
   };
 }
 
@@ -40,12 +43,15 @@ export function TodoPage() {
   const nav = useNav();
   const insets = useSafeAreaInsets();
   const gate = useWriteGate();
+  const {healthy: wechatHealthy, refresh: refreshWechat} = useWechatHealth();
+  const [wechatSheetVisible, setWechatSheetVisible] = useState(false);
   const [filter, setFilter] = useState<string>('全部');
   const [jobs, setJobs] = useState<ScheduleJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
   const [editing, setEditing] = useState<ScheduleJob | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<Todo['id'] | null>(null);
 
   const reload = () => {
     setLoading(true);
@@ -65,24 +71,33 @@ export function TodoPage() {
   const list = todos.filter(t => filter === '全部' || t.type === filter);
 
   const openCreate = () => {
+    // 后端建提醒强制要求先绑定微信（到点靠微信推送），未绑定直接弹二维码，省一趟"创建失败"的来回。
+    if (wechatHealthy === false) {
+      setWechatSheetVisible(true);
+      return;
+    }
     setDialogMode('create');
     setEditing(null);
     setDialogOpen(true);
   };
 
-  const openEdit = (id: Todo['id']) => {
+  const openEdit = async (id: Todo['id']) => {
     const job = jobs.find(j => j.id === id);
     if (!job) return;
+    // 列表里的 note 截了前 100 字，编辑要看全文，先拉一次单条详情；拉不到就退回列表里的摘要。
+    setDetailLoadingId(id);
+    const full = await getReminder(String(id)).catch(() => null);
+    setDetailLoadingId(null);
     setDialogMode('edit');
-    setEditing(job);
+    setEditing(full ?? job);
     setDialogOpen(true);
   };
 
   const toggle = async (t: Todo) => {
-    const next = !t.enabled;
-    setJobs(js => js.map(j => (j.id === t.id ? {...j, enabled: next} : j)));
+    const nextStatus = t.enabled ? 'paused' : 'active';
+    setJobs(js => js.map(j => (j.id === t.id ? {...j, status: nextStatus} : j)));
     try {
-      await updateReminder(String(t.id), {enabled: next});
+      await updateReminder(String(t.id), {status: nextStatus});
     } catch {
       reload();
     }
@@ -108,6 +123,14 @@ export function TodoPage() {
           <Plus size={20} color="#fff" />
         </TouchableOpacity>
       </View>
+
+      {wechatHealthy === false ? (
+        <TouchableOpacity style={styles.wechatBanner} onPress={() => setWechatSheetVisible(true)}>
+          <MessageCircleWarning size={16} color={colors.dark} />
+          <Text style={styles.wechatBannerText}>提醒到点需要通过微信通知你，先绑定微信</Text>
+          <Text style={styles.wechatBannerAction}>去绑定</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.filterBar}>
         {FILTERS.map(f => (
@@ -138,9 +161,11 @@ export function TodoPage() {
                     </View>
                   </View>
                 </View>
-                <TouchableOpacity onPress={() => gate(() => toggle(todo))} style={[styles.switch, {backgroundColor: todo.enabled ? colors.primary : colors.border}]}>
-                  <View style={[styles.knob, {left: todo.enabled ? 22 : 2}]} />
-                </TouchableOpacity>
+                {jobs.find(j => j.id === todo.id)?.status === 'done' ? null : (
+                  <TouchableOpacity onPress={() => gate(() => toggle(todo))} style={[styles.switch, {backgroundColor: todo.enabled ? colors.primary : colors.border}]}>
+                    <View style={[styles.knob, {left: todo.enabled ? 22 : 2}]} />
+                  </TouchableOpacity>
+                )}
               </View>
 
               {todo.description ? <Text style={styles.desc} numberOfLines={3}>{todo.description}</Text> : null}
@@ -148,7 +173,13 @@ export function TodoPage() {
               <View style={styles.cardFooter}>
                 <Text style={styles.status}>{todo.enabled ? '已启用' : '已停用'}</Text>
                 <View style={{flexDirection: 'row', gap: 16}}>
-                  <TouchableOpacity onPress={() => gate(() => openEdit(todo.id))}><PenLine size={16} color={colors.textSub} /></TouchableOpacity>
+                  <TouchableOpacity onPress={() => gate(() => openEdit(todo.id))} disabled={detailLoadingId === todo.id}>
+                    {detailLoadingId === todo.id ? (
+                      <ActivityIndicator size="small" color={colors.textSub} />
+                    ) : (
+                      <PenLine size={16} color={colors.textSub} />
+                    )}
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={() => gate(() => remove(todo.id))}><Trash2 size={16} color={colors.textSub} /></TouchableOpacity>
                 </View>
               </View>
@@ -165,6 +196,15 @@ export function TodoPage() {
         onClose={() => setDialogOpen(false)}
         onSaved={reload}
       />
+
+      <WechatBindSheet
+        visible={wechatSheetVisible}
+        onClose={() => {
+          setWechatSheetVisible(false);
+          void refreshWechat();
+        }}
+        onBound={() => void refreshWechat()}
+      />
     </View>
   );
 }
@@ -174,6 +214,19 @@ const styles = StyleSheet.create({
   header: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 12},
   headerTitle: {fontSize: 18, fontWeight: '700', color: colors.textMain},
   addBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center'},
+  wechatBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: radius.lg,
+    backgroundColor: colors.premium + '33',
+  },
+  wechatBannerText: {flex: 1, fontSize: 12, color: colors.textMain, fontWeight: '600'},
+  wechatBannerAction: {fontSize: 12, color: colors.textMain, fontWeight: '700', textDecorationLine: 'underline'},
   filterBar: {flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginBottom: 16},
   chip: {paddingHorizontal: 16, paddingVertical: 6, borderRadius: radius.pill},
   body: {paddingHorizontal: 20, paddingBottom: 40},
