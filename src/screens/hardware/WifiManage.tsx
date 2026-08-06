@@ -10,7 +10,9 @@
  */
 import React, {useEffect, useRef, useState} from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Clipboard,
   Share,
   ScrollView,
   StyleSheet,
@@ -23,6 +25,19 @@ import {SubHeader, Card, Toggle, IosAlert, ModalInput, HW} from './parts';
 import {Mr20DebugLog} from '../../components/mr20/Mr20DebugLog';
 import {useMr20} from '../../hooks/useMr20';
 import {MR20_KEY_LEN, isValidDeviceKey} from '../../native/mr20/protocol';
+
+/**
+ * 从一行自检日志里挑出步骤标记，如「【4/8】同步热点密码：发 ...」→ {step:4, total:8, label:'同步热点密码'}。
+ * 只有步骤标题行带这个标记，子步骤（缩进的 ⏱/✓/✗ 行）不带，天然只在步骤切换时更新进度条。
+ */
+function parseDiagStep(line: string): {step: number; total: number; label: string} | null {
+  const m = /【(\d+)\/(\d+)】([^\n]*)/.exec(line);
+  if (!m) {
+    return null;
+  }
+  const label = (m[3] || '').split(/[:：]/)[0].trim();
+  return {step: Number(m[1]), total: Number(m[2]), label};
+}
 
 type WifiState = 'off' | 'turning_on' | 'on' | 'turning_off';
 /**
@@ -67,18 +82,29 @@ export function WifiManage({
   const [draftPwd, setDraftPwd] = useState('');
   const [saving, setSaving] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  // 配网自检：整条链路要跑近一分钟，所以边跑边把日志推到界面上，别让用户以为卡死。
+  // 配网自检：整条链路要跑近一分钟。原始日志术语太重，普通用户看不懂，所以拆成两层：
+  // diagStep/diagResult 驱动一条简单进度条给用户看，diagLines 这份完整日志折叠放在页面下方，
+  // 排查问题时开发/客服再展开看。
   const [diagLines, setDiagLines] = useState<string[]>([]);
   const [diagRunning, setDiagRunning] = useState(false);
+  const [diagStep, setDiagStep] = useState<{step: number; total: number; label: string} | null>(
+    null,
+  );
+  const [diagResult, setDiagResult] = useState<{ok: boolean; verdict: string} | null>(null);
+  const [diagLogOpen, setDiagLogOpen] = useState(false);
   const diagBoxRef = useRef<ScrollView | null>(null);
   // 空白设备首次设密钥：后端签发的密钥回显在这里，等用户确认后才真正写进设备。
+  // autoInitKey 只用来判断弹窗开不开；真正会被写进设备的是 autoInitDraft——
+  // 用户可以直接改，不接受就不算「必须用后端这把」。
   const [autoInitKey, setAutoInitKey] = useState<string | null>(null);
+  const [autoInitDraft, setAutoInitDraft] = useState('');
   const autoInitTriedRef = useRef(false);
 
   const busy = wifiState === 'turning_on' || wifiState === 'turning_off';
 
-  // 从「设置密钥」提示进来（autoInit）：连上之后立刻向后端申请密钥，不需要用户自己想密码。
-  // 每次进页面只试一次（autoInitTriedRef），避免 connState 抖动/重渲染反复发请求。
+  // 从「设置密钥」提示进来（autoInit）：连上之后立刻向后端申请密钥，不需要用户自己想密码，
+  // 但也不锁死——弹窗里这把密钥可以改。每次进页面只试一次（autoInitTriedRef），避免
+  // connState 抖动/重渲染反复发请求。
   useEffect(() => {
     if (!autoInit || autoInitTriedRef.current || connState !== 'connected') {
       return;
@@ -87,6 +113,7 @@ export function WifiManage({
     issueBackendKey().then(key => {
       if (key) {
         setAutoInitKey(key);
+        setAutoInitDraft(key);
       }
     });
   }, [autoInit, connState, issueBackendKey]);
@@ -248,20 +275,29 @@ export function WifiManage({
     setDiagRunning(true);
     setErrMsg(null);
     setDiagLines([]);
-    diagnoseWifiSetup(key, line => setDiagLines(prev => [...prev, line]), {
-      resetFirst,
-    })
+    setDiagStep(null);
+    setDiagResult(null);
+    const onLine = (line: string) => {
+      setDiagLines(prev => [...prev, line]);
+      const step = parseDiagStep(line);
+      if (step) {
+        setDiagStep(step);
+      }
+    };
+    diagnoseWifiSetup(key, onLine, {resetFirst})
       .then(report => {
         setHasSavedPwd(true);
         if (report.ok) {
           setPwd(report.pwd);
           setSsid(report.ssid || ssid);
         }
+        setDiagResult({ok: report.ok, verdict: report.verdict});
         Alert.alert(report.ok ? '配网成功' : '配网未完成', report.verdict);
       })
       .catch(e => {
         const msg = String((e as Error)?.message || e);
         setDiagLines(prev => [...prev, `自检中断：${msg}`]);
+        setDiagResult({ok: false, verdict: msg});
         setErrMsg(msg);
       })
       .finally(() => setDiagRunning(false));
@@ -278,18 +314,29 @@ export function WifiManage({
     setDiagRunning(true);
     setErrMsg(null);
     setDiagLines([]);
-    testHotspotJoin(candidate, line => setDiagLines(prev => [...prev, line]))
+    setDiagStep(null);
+    setDiagResult(null);
+    const onLine = (line: string) => {
+      setDiagLines(prev => [...prev, line]);
+      const step = parseDiagStep(line);
+      if (step) {
+        setDiagStep(step);
+      }
+    };
+    testHotspotJoin(candidate, onLine)
       .then(report => {
         if (report.ok) {
           setPwd(report.pwd);
           setSsid(report.ssid || ssid);
           setHasSavedPwd(true);
         }
+        setDiagResult({ok: report.ok, verdict: report.verdict});
         Alert.alert(report.ok ? '这个密码可用' : '没能连上', report.verdict);
       })
       .catch(e => {
         const msg = String((e as Error)?.message || e);
         setDiagLines(prev => [...prev, `测试中断：${msg}`]);
+        setDiagResult({ok: false, verdict: msg});
         setErrMsg(msg);
       })
       .finally(() => setDiagRunning(false));
@@ -435,27 +482,38 @@ export function WifiManage({
           自动重连，再重新设密钥并同步热点密码。只重置密钥，不会删设备上的录音。
         </Text>
 
-        {diagLines.length ? (
-          <View style={st.diagBox}>
-            <ScrollView
-              ref={diagBoxRef}
-              style={st.diagScroll}
-              nestedScrollEnabled
-              onContentSizeChange={() =>
-                diagBoxRef.current?.scrollToEnd({animated: true})
-              }>
-              {diagLines.map((line, i) => (
-                <Text key={i} style={st.diagLine}>
-                  {line}
-                </Text>
-              ))}
-            </ScrollView>
-            <TouchableOpacity
-              style={st.diagShare}
-              onPress={shareDiagLog}
-              disabled={diagRunning}>
-              <Text style={st.diagShareText}>导出日志</Text>
-            </TouchableOpacity>
+        {/* 给普通用户看的只是一条进度条 + 当前在做什么，原始协议日志折叠在页面下方
+            （靠近「协议调试日志」），需要时开发/客服再展开看。 */}
+        {diagRunning || diagStep || diagResult ? (
+          <View style={st.progressCard}>
+            <View style={st.progressHeaderRow}>
+              <Text style={st.progressTitle}>
+                {diagResult
+                  ? diagResult.ok
+                    ? '✓ 配网成功'
+                    : '✗ 配网未完成'
+                  : diagStep
+                  ? `第 ${diagStep.step}/${diagStep.total} 步`
+                  : '正在准备…'}
+              </Text>
+              {diagRunning ? <ActivityIndicator size="small" color={HW.blue} /> : null}
+            </View>
+            <View style={st.progressTrack}>
+              <View
+                style={[
+                  st.progressFill,
+                  {
+                    width: diagStep
+                      ? `${Math.min(100, Math.round((diagStep.step / diagStep.total) * 100))}%`
+                      : '4%',
+                    backgroundColor: diagResult ? (diagResult.ok ? HW.green : HW.red) : HW.blue,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={st.progressLabel} numberOfLines={3}>
+              {diagResult ? diagResult.verdict : diagStep?.label || '正在连接设备…'}
+            </Text>
           </View>
         ) : null}
 
@@ -528,6 +586,42 @@ export function WifiManage({
           <Text style={st.tip}>• 升级、配置密码时，无法手动关闭 WiFi</Text>
         </View>
 
+        {diagLines.length ? (
+          <View style={st.rawLogWrap}>
+            <TouchableOpacity
+              style={st.rawLogToggle}
+              onPress={() => setDiagLogOpen(o => !o)}
+              activeOpacity={0.7}>
+              <Text style={st.rawLogToggleText}>
+                自检详细日志（开发排查用，{diagLines.length} 行） {diagLogOpen ? '▾' : '▸'}
+              </Text>
+            </TouchableOpacity>
+            {diagLogOpen ? (
+              <View style={st.diagBox}>
+                <ScrollView
+                  ref={diagBoxRef}
+                  style={st.diagScroll}
+                  nestedScrollEnabled
+                  onContentSizeChange={() =>
+                    diagBoxRef.current?.scrollToEnd({animated: true})
+                  }>
+                  {diagLines.map((line, i) => (
+                    <Text key={i} style={st.diagLine}>
+                      {line}
+                    </Text>
+                  ))}
+                </ScrollView>
+                <TouchableOpacity
+                  style={st.diagShare}
+                  onPress={shareDiagLog}
+                  disabled={diagRunning}>
+                  <Text style={st.diagShareText}>导出日志</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* 协议调试日志：看开热点 WIFIO/WIFIS 真实往返 */}
         <Mr20DebugLog logs={logs} />
       </ScrollView>
@@ -597,32 +691,66 @@ export function WifiManage({
         </View>
       </IosAlert>
 
-      {/* 空白设备首次设密钥：密钥是后端签发的，这里只回显+确认，不给自定义输入框——
-          不满意可以确认完成后再用下面「重置密钥后重新配网」改成自己想要的。 */}
+      {/* 空白设备首次设密钥：默认用后端签发的这把，但可以复制出去保存，也可以直接改成
+          自己想要的值再确认——不接受就不算「必须用后端这把」，改完这里就是最终写进设备的值。 */}
       <IosAlert
         visible={autoInitKey !== null}
-        onClose={() => setAutoInitKey(null)}
+        onClose={() => {
+          setAutoInitKey(null);
+          setAutoInitDraft('');
+        }}
         title="设置设备密钥"
         message={
-          `已为这台设备生成密钥：${autoInitKey ?? ''}\n\n` +
-          '首次配对需要用这把密钥完成初始化（约 1 分半，请让设备保持开机并放在手机旁边）。' +
-          '完成后可以随时在下方「重置密钥后重新配网」里改成你自己的密码。'
+          '已为这台设备生成一把密钥，可以直接用，也可以改成自己想要的（' +
+          `${MR20_KEY_LEN} 位英文字母或数字）。首次配对约需 1 分半，` +
+          '请让设备保持开机并放在手机旁边。'
         }
         buttons={[
-          {text: '取消', onPress: () => setAutoInitKey(null)},
+          {
+            text: '取消',
+            onPress: () => {
+              setAutoInitKey(null);
+              setAutoInitDraft('');
+            },
+          },
           {
             text: '开始设置',
             bold: true,
             onPress: () => {
-              const key = autoInitKey;
+              const next = autoInitDraft.trim();
               setAutoInitKey(null);
-              if (key) {
-                runDiagnose(key, true);
+              setAutoInitDraft('');
+              if (!isValidDeviceKey(next)) {
+                setErrMsg(`密钥必须是 ${MR20_KEY_LEN} 位英文字母或数字（不能含中文、空格）。`);
+                return;
               }
+              runDiagnose(next, true);
             },
           },
-        ]}
-      />
+        ]}>
+        <View style={{width: '100%', gap: 8, marginTop: 12}}>
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+            <ModalInput
+              value={autoInitDraft}
+              onChangeText={setAutoInitDraft}
+              placeholder={`${MR20_KEY_LEN} 位字母或数字`}
+              autoCapitalize="none"
+              autoCorrect={false}
+              maxLength={MR20_KEY_LEN}
+              style={{flex: 1}}
+            />
+            <TouchableOpacity
+              onPress={() => {
+                if (autoInitDraft) {
+                  Clipboard.setString(autoInitDraft);
+                }
+              }}
+              hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+              <Copy size={18} color={HW.textSub} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </IosAlert>
     </View>
   );
 }
@@ -649,7 +777,16 @@ const st = StyleSheet.create({
   modifyTextDisabled: {color: HW.textTertiary},
   dangerText: {color: '#E5484D'},
   primaryText: {color: '#0A7AFF'},
-  diagBox: {marginTop: 12, borderRadius: 16, backgroundColor: '#11140F', padding: 10},
+  progressCard: {marginTop: 16, backgroundColor: HW.card, borderRadius: 16, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: HW.cardBorder},
+  progressHeaderRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
+  progressTitle: {fontSize: 14, fontWeight: '600', color: HW.textMain},
+  progressTrack: {height: 6, borderRadius: 3, backgroundColor: HW.fill, overflow: 'hidden', marginTop: 10},
+  progressFill: {height: '100%', borderRadius: 3},
+  progressLabel: {fontSize: 12, color: HW.textSub, marginTop: 8, lineHeight: 17},
+  rawLogWrap: {marginTop: 16},
+  rawLogToggle: {borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 12, paddingVertical: 9, alignItems: 'center'},
+  rawLogToggleText: {fontSize: 12, fontWeight: '600', color: HW.textSub},
+  diagBox: {marginTop: 8, borderRadius: 16, backgroundColor: '#11140F', padding: 10},
   diagScroll: {maxHeight: 280},
   diagLine: {fontSize: 10.5, fontFamily: 'Menlo', color: '#C9D2C5', lineHeight: 15},
   diagShare: {marginTop: 8, paddingVertical: 8, alignItems: 'center', borderRadius: 10, backgroundColor: '#1E2419'},

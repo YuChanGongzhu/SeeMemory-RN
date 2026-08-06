@@ -348,7 +348,9 @@ export function HomeHub() {
           const writable = !!card.fragmentId;
           return (
             <View style={styles.memRow}>
-              <Text style={styles.time}>{shortTime(card.time)}</Text>
+              <Text style={styles.time} numberOfLines={1} allowFontScaling={false}>
+                {shortTime(card.time)}
+              </Text>
               <View style={{flex: 1, minWidth: 0}}>
                 <MemoryCard
                   card={card}
@@ -407,6 +409,6 @@ const styles = StyleSheet.create({
   filterDot: {position: 'absolute', top: -2, right: -4, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textMain, borderWidth: 2, borderColor: colors.bgApp},
   dateLabel: {fontSize: 16, fontWeight: '700', color: colors.textMain, marginBottom: 16},
   memRow: {flexDirection: 'row', gap: 16, alignItems: 'flex-start', marginBottom: 16},
-  time: {width: 44, fontSize: 15, fontWeight: '700', color: colors.textMain, marginTop: 16},
+  time: {width: 44, flexShrink: 0, fontSize: 15, fontWeight: '700', color: colors.textMain, marginTop: 16},
   searchEmpty: {textAlign: 'center', color: colors.textSub, fontSize: 14, marginTop: 40},
 });

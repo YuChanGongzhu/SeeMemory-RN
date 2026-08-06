@@ -9,7 +9,7 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.ringmemoryapp.imagepicker.ImagePickerPackage
 import com.ringmemoryapp.audioplayer.AudioPlayerPackage
 import com.ringmemoryapp.audiorecorder.AudioRecorderPackage
-import com.ringmemoryapp.rokid.RokidPackage
+import com.ringmemoryapp.saveimage.SaveImagePackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -19,10 +19,10 @@ class MainApplication : Application(), ReactApplication {
       packageList =
         PackageList(this).packages.apply {
           // Packages that cannot be autolinked yet can be added manually here, for example:
-          add(RokidPackage())
           add(ImagePickerPackage())
           add(AudioPlayerPackage())
           add(AudioRecorderPackage())
+          add(SaveImagePackage())
         },
     )
   }

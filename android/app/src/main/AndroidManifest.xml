@@ -9,6 +9,13 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 保存微信绑定二维码到相册；Android 10+ 走 MediaStore scoped storage 不需要此权限，仅兼容更早系统。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+    <!-- Android 11+ 包可见性：跳转微信需要能查到微信是否已安装（Linking.canOpenURL('weixin://')）。 -->
+    <queries>
+        <package android:name="com.tencent.mm" />
+    </queries>
 
     <application
       android:name=".MainApplication"

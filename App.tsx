@@ -16,6 +16,8 @@ import {RootView} from './src/navigation/Root';
 import {Mr20Provider} from './src/hooks/useMr20';
 import {ImagePreviewProvider} from './src/hooks/useImagePreview';
 import {CreateSummaryProvider} from './src/hooks/useCreateSummary';
+import {TourProvider} from './src/onboarding/TourContext';
+import {TourSpotlight} from './src/onboarding/TourSpotlight';
 import {AppDrawer} from './src/components/AppDrawer';
 import {LoginScreen} from './src/screens/LoginScreen';
 import {PrivacyConsentScreen} from './src/screens/ConsentScreen';
@@ -60,18 +62,21 @@ function AuthGate() {
 
   return (
     <Mr20Provider>
-      <NavProvider>
-        <ImagePreviewProvider>
-          <CreateSummaryProvider>
-            <StatusBar barStyle="dark-content" backgroundColor={colors.bgApp} />
-            <View style={styles.root}>
-              <RootView />
-            </View>
-            <AppDrawer />
-            <LoginPromptOverlay />
-          </CreateSummaryProvider>
-        </ImagePreviewProvider>
-      </NavProvider>
+      <TourProvider>
+        <NavProvider>
+          <ImagePreviewProvider>
+            <CreateSummaryProvider>
+              <StatusBar barStyle="dark-content" backgroundColor={colors.bgApp} />
+              <View style={styles.root}>
+                <RootView />
+              </View>
+              <AppDrawer />
+              <LoginPromptOverlay />
+              <TourSpotlight mount="root" />
+            </CreateSummaryProvider>
+          </ImagePreviewProvider>
+        </NavProvider>
+      </TourProvider>
     </Mr20Provider>
   );
 }

@@ -238,14 +238,16 @@ export function MemoryDetail() {
             ) : null}
 
             <View style={styles.tlBody}>
-              <View style={styles.dashLine} />
               {clusters.length ? (
                 clusters.map((c, i) => {
                   if (!c.name) {
                     const node = c.items[0];
                     return (
                       <View key={node.id ?? i} style={styles.tlRow}>
-                        <View style={styles.dotHollow} />
+                        <View style={styles.rail}>
+                          <View style={styles.dotHollow} />
+                          <View style={styles.railLine} />
+                        </View>
                         <View style={{flex: 1, minWidth: 0}}>
                           <View style={styles.tlMeta}>
                             <Text style={styles.tlTime}>{node.time}</Text>
@@ -414,9 +416,11 @@ const styles = StyleSheet.create({
   miniSegText: {fontSize: 12, fontWeight: '600', color: colors.textSub},
   miniSegTextOn: {color: colors.textMain},
   tlBody: {position: 'relative', gap: 24, paddingLeft: 12},
-  dashLine: {position: 'absolute', left: 15, top: 6, bottom: 0, width: 0, borderLeftWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', borderStyle: 'dashed'},
   tlRow: {flexDirection: 'row', gap: 16},
-  dotHollow: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.nested, borderWidth: 2, borderColor: colors.textMain, marginTop: 4, marginLeft: -4},
+  rail: {width: 10},
+  dotHollow: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.nested, borderWidth: 2, borderColor: colors.textMain, marginTop: 4},
+  // Bleeds `bottom: -24` past its own row to bridge tlBody's row `gap`, so the dash reaches the next dot uninterrupted.
+  railLine: {position: 'absolute', left: 4.25, top: 14, bottom: -24, width: 0, borderLeftWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', borderStyle: 'dashed'},
   dotHollowGray: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.nested, borderWidth: 2, borderColor: colors.textSub, marginTop: 4, marginLeft: -4},
   tlMeta: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
   tlTime: {fontSize: 12, fontWeight: '600', color: colors.textSub},

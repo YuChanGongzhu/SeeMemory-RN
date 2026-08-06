@@ -185,6 +185,12 @@ export async function runWifiSetupDiagnostic(
     log(`  ✓ 固件版本 ${fw}`);
     const wfv = await client.getWifiVersion().catch(() => '');
     log(`  WiFi 模组版本 ${wfv || '（未回）'}`);
+    // 步骤 0（resetFirst）里 20s 探测窗口可能在设备真正开口前就到期，导致 connState 停在
+    // 'pairing'——但这里已经实打实收到 FW 应答，link 明摆着是活的，不该继续让 UI 停在
+    // 「正在连接并配置设备…」。跟 markConnected() 一样只是 setState + emit，重复调用无害。
+    if (client.state !== 'connected') {
+      client.markConnected();
+    }
   }
   // 「设备一开始就沉默」要一路带到结论：同样是 SK 无应答，从沉默开始和从能应答开始，
   // 说明的问题完全不同（前者是密钥没对上，后者才轮得到怀疑 SK 这条指令本身）。
@@ -244,6 +250,10 @@ export async function runWifiSetupDiagnostic(
   }
   if (sk === 'ok') {
     log('  ✓ 设备回 GJJY_DEV&SK&OK，密钥已写入');
+    // 收到 SK_OK 本身就是一轮完整的认证握手回包，跟步骤 1 的 FW 一样是「link 活着」的实证。
+    if (client.state !== 'connected') {
+      client.markConnected();
+    }
   }
 
   // 步骤 1 沉默过的话，这里补一枪 FW —— 这是**最干净的一个判据**：
@@ -262,6 +272,9 @@ export async function runWifiSetupDiagnostic(
         ? `  ✓ 这次回了固件版本 ${fw2} —— 密钥对上了，设备已解锁`
         : '  ✗ 仍然不回 FW —— 沉默和密钥无关，是设备/通知通道自己的问题',
     );
+    if (fw2 && client.state !== 'connected') {
+      client.markConnected();
+    }
   }
   // **马上存**，别等 WIFI&CH 那步的结论。只要 SK 不是 ERR，设备就有可能已经把这把密钥收下了
   // （无应答尤其可能——协议这条应答本来就要 10s）。此时手机上必须有它：后面任何一步失败

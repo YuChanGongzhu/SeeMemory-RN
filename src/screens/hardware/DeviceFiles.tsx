@@ -30,6 +30,8 @@ import {fileEpoch} from '../../services/mr20Ingest';
 import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../../services/mediaFormat';
 import {SubHeader, IosAlert, HW} from './parts';
 import {TransferBadge} from './TransferBadge';
+import {TourTarget} from '../../onboarding/TourTarget';
+import {useTour} from '../../onboarding/TourContext';
 
 const keyOf = (f: Mr20File) => `${f.dir}/${f.fname}`;
 const stripMp3 = (n: string) => n.replace(/\.mp3$/i, '');
@@ -52,6 +54,7 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
     error,
     clearError,
   } = useMr20();
+  const tour = useTour();
 
   const [files, setFiles] = useState<Mr20File[]>([]);
   const [loading, setLoading] = useState(true);
@@ -315,9 +318,16 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
           <>
             <View style={st.selectHead}>
               <Text style={st.selectTitle}>全部设备录音</Text>
-              <TouchableOpacity onPress={toggleAll} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
-                <Text style={st.selectAll}>{allSelected ? '取消全选' : '全选'}</Text>
-              </TouchableOpacity>
+              <TourTarget id="select-files">
+                <TouchableOpacity
+                  onPress={() => {
+                    toggleAll();
+                    tour.notifyPress('select-files');
+                  }}
+                  hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                  <Text style={st.selectAll}>{allSelected ? '取消全选' : '全选'}</Text>
+                </TouchableOpacity>
+              </TourTarget>
             </View>
             <View style={st.headHintRow}>
               <Text style={st.headHint}>
@@ -402,18 +412,23 @@ export function DeviceFiles({onBack}: {onBack: () => void}) {
               </TouchableOpacity>
             </View>
           ) : null}
-          <TouchableOpacity
-            style={[
-              st.startBtn,
-              (selectedFiles.length === 0 || deletingDevice) && st.startBtnDisabled,
-            ]}
-            disabled={selectedFiles.length === 0 || deletingDevice}
-            onPress={start}>
-            <Text style={st.startBtnText}>
-              蓝牙上传
-              {selectedFiles.length ? `（${selectedFiles.length} 个 · ${fmtMB(selectedBytes)}）` : ''}
-            </Text>
-          </TouchableOpacity>
+          <TourTarget id="upload-files">
+            <TouchableOpacity
+              style={[
+                st.startBtn,
+                (selectedFiles.length === 0 || deletingDevice) && st.startBtnDisabled,
+              ]}
+              disabled={selectedFiles.length === 0 || deletingDevice}
+              onPress={() => {
+                start();
+                tour.notifyPress('upload-files');
+              }}>
+              <Text style={st.startBtnText}>
+                蓝牙上传
+                {selectedFiles.length ? `（${selectedFiles.length} 个 · ${fmtMB(selectedBytes)}）` : ''}
+              </Text>
+            </TouchableOpacity>
+          </TourTarget>
           <TouchableOpacity
             style={st.wifiLink}
             disabled={selectedFiles.length === 0 || deletingDevice}

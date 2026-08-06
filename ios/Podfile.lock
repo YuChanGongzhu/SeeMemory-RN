@@ -28,9 +28,6 @@ PODS:
     - SocketRocket
     - Yoga
   - boost (1.84.0)
-  - CocoaLumberjack/Core (3.9.1)
-  - CocoaLumberjack/Swift (3.9.1):
-    - CocoaLumberjack/Core
   - DoubleConversion (1.1.6)
   - fast_float (8.0.0)
   - FBLazyVector (0.84.1)
@@ -2573,10 +2570,6 @@ PODS:
     - React-perflogger (= 0.84.1)
     - React-utils (= 0.84.1)
     - SocketRocket
-  - RGCoreKit (0.0.2):
-    - CocoaLumberjack/Swift
-  - RGCxrClient (1.0.1):
-    - RGCoreKit (= 0.0.2)
   - RNDeviceInfo (12.1.0):
     - React-Core
   - RNReanimated (4.4.1):
@@ -2881,10 +2874,6 @@ PODS:
     - React-Core
     - React-RCTFabric
     - ReactCommon/turbomodule/core
-  - RTNRokidModule (1.0.0):
-    - React-Core
-    - RGCoreKit
-    - RGCxrClient
   - SocketRocket (0.7.1)
   - Yoga (0.0.0)
 
@@ -2968,24 +2957,18 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios/ReactAppDependencyProvider`)
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
-  - RGCoreKit
-  - RGCxrClient
   - RNDeviceInfo (from `../node_modules/react-native-device-info`)
   - RNReanimated (from `../node_modules/react-native-reanimated`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNSVG (from `../node_modules/react-native-svg`)
   - RNWorklets (from `../node_modules/react-native-worklets`)
   - RTNMr20Module (from `./LocalPods/RTNMr20Module`)
-  - RTNRokidModule (from `./LocalPods/RTNRokidModule`)
   - SocketRocket (~> 0.7.1)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
 SPEC REPOS:
   trunk:
-    - CocoaLumberjack
     - React-Codegen
-    - RGCoreKit
-    - RGCxrClient
     - SocketRocket
 
 EXTERNAL SOURCES:
@@ -3158,15 +3141,12 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-worklets"
   RTNMr20Module:
     :path: "./LocalPods/RTNMr20Module"
-  RTNRokidModule:
-    :path: "./LocalPods/RTNRokidModule"
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
   AsyncStorage: 1a1f3c9895b5fcb39ff48d73250d90befad3c87c
   boost: 7e761d76ca2ce687f7cc98e698152abd03a18f90
-  CocoaLumberjack: e4ba3b414dfca8c1916c6303d37f63b3a95134c6
   DoubleConversion: cb417026b2400c8f53ae97020b2be961b59470cb
   fast_float: b32c788ed9c6a8c584d114d0047beda9664e7cc6
   FBLazyVector: baf9d0492aa305444465c798e972f87e6a60dc69
@@ -3244,18 +3224,15 @@ SPEC CHECKSUMS:
   ReactAppDependencyProvider: e96e93b493d8d86eeaee3e590ba0be53f6abe46f
   ReactCodegen: 0d654b8884c985fee21cb590e9f0643310da2a7a
   ReactCommon: 9351bfe9ce10e0ff26817189da9f8b613437f3df
-  RGCoreKit: 28a9f67424abfefedf55578a3473d84b48119ab2
-  RGCxrClient: 9e83eb546697ea018e2066858e6b1504ea973d4a
   RNDeviceInfo: 723e97dd98af9b7913477e7a40252c15517c258c
   RNReanimated: 256489c591f96e42aa80460de7169e1d0ff633dc
   RNScreens: e902eba58a27d3ad399a495d578e8aba3ea0f490
   RNSVG: a14f58a6be359fd52b3d6eef86c1a6461264dd78
   RNWorklets: 1b69c3179ce775011f1020a6f6d5254f9faf866e
   RTNMr20Module: aa12986a0b78d7968a82a7c06dd54efa858b1a35
-  RTNRokidModule: 171c046c31337fe5cf670f682608e9accb266969
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: 9e495ad6f457c4ff504a8328981496b5cf41dd7f
 
-PODFILE CHECKSUM: 001f02eb5aa62d234612980587ba6e2103b18f6d
+PODFILE CHECKSUM: e9b838e612f45a2ac6dd71814489f10b06a8b0d8
 
 COCOAPODS: 1.16.2

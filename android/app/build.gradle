@@ -116,7 +116,4 @@ dependencies {
     } else {
         implementation jscFlavor
     }
-
-    // Rokid CXR-L SDK for glasses integration
-    implementation("com.rokid.cxr:client-l:1.0.1")
 }

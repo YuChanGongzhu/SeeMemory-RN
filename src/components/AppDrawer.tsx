@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {Zap, Cloud, Sparkles, Smartphone, Archive, CheckCircle2, ChevronRight, ShieldCheck} from 'lucide-react-native';
+import {Zap, Cloud, Sparkles, Smartphone, Archive, CheckCircle2, ChevronRight, ShieldCheck, MessageCircle} from 'lucide-react-native';
 import {colors, radius, type as T} from '../design/tokens';
 import {Avatar, ProgressBar} from '../ui/kit';
 import {useAuth} from '../auth/AuthContext';
@@ -22,6 +22,9 @@ import {useCreateSummary} from '../hooks/useCreateSummary';
 import {useNav, type ScreenName} from '../navigation/nav';
 import {SUBSCRIPTION_ENABLED} from '../config/features';
 import {getApiEnv} from '../apis/core/env';
+import {TourTarget} from '../onboarding/TourTarget';
+import {TourSpotlight} from '../onboarding/TourSpotlight';
+import {useTour} from '../onboarding/TourContext';
 
 const {width: SCREEN_W} = Dimensions.get('window');
 const DRAWER_W = Math.min(360, SCREEN_W * 0.85);
@@ -90,6 +93,7 @@ export function AppDrawer() {
   const activity = useActivityStats(drawerOpen);
   const nav = useNav();
   const {openCreateSummary} = useCreateSummary();
+  const tour = useTour();
 
   const slide = useRef(new Animated.Value(-DRAWER_W)).current;
   const fade = useRef(new Animated.Value(0)).current;
@@ -237,7 +241,17 @@ export function AppDrawer() {
 
           {/* Menu */}
           <View style={{marginTop: 8}}>
-            <MenuRow icon={<Smartphone size={20} color={colors.textMain} />} label="记忆粒" onPress={() => go('hardware')} />
+            <TourTarget id="drawer-mr20" mount="drawer">
+              <MenuRow
+                icon={<Smartphone size={20} color={colors.textMain} />}
+                label="记忆粒"
+                onPress={() => {
+                  go('hardware');
+                  tour.notifyPress('drawer-mr20');
+                }}
+              />
+            </TourTarget>
+            <MenuRow icon={<MessageCircle size={20} color={colors.textMain} />} label="微信接入" onPress={() => go('wechatBind')} />
             <MenuRow icon={<Archive size={20} color={colors.textMain} />} label="沉淀" onPress={() => go('archive')} />
             <MenuRow icon={<CheckCircle2 size={20} color={colors.textMain} />} label="待办提醒" onPress={() => go('todo')} />
             <MenuRow icon={<ShieldCheck size={20} color={colors.textMain} />} label="隐私与 AI" onPress={() => go('privacyAi')} />
@@ -255,6 +269,9 @@ export function AppDrawer() {
           </TouchableOpacity>
         ) : null}
       </Animated.View>
+
+      {/* 抽屉是独立 Modal 原生层，高亮层只能挂在这里面，App 根部那份盖不上来。 */}
+      <TourSpotlight mount="drawer" />
     </Modal>
   );
 }

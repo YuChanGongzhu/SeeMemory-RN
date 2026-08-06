@@ -4,6 +4,8 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Menu, ChevronLeft, Sparkles} from 'lucide-react-native';
 import {colors, type as T, radius} from '../design/tokens';
 import {IconButton} from './kit';
+import {TourTarget} from '../onboarding/TourTarget';
+import {useTour} from '../onboarding/TourContext';
 
 /** Home hub header: hamburger (opens drawer) + frosted "搜索记忆" search input + optional right slot. */
 export function HomeHeader({
@@ -18,11 +20,20 @@ export function HomeHeader({
   right?: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const tour = useTour();
   return (
     <View style={[styles.home, {paddingTop: insets.top + 8}]}>
-      <IconButton onPress={onOpenDrawer} bg="transparent" size={38}>
-        <Menu size={26} color={colors.textMain} strokeWidth={1.9} />
-      </IconButton>
+      <TourTarget id="drawer-open">
+        <IconButton
+          onPress={() => {
+            onOpenDrawer();
+            tour.notifyPress('drawer-open');
+          }}
+          bg="transparent"
+          size={38}>
+          <Menu size={26} color={colors.textMain} strokeWidth={1.9} />
+        </IconButton>
+      </TourTarget>
       <View style={styles.search}>
         <Sparkles size={16} color={colors.textSub} />
         <TextInput

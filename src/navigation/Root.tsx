@@ -16,6 +16,7 @@ import {PowerStorePage} from '../screens/PowerStorePage';
 import {ProfilePage} from '../screens/ProfilePage';
 import {TimelinePage} from '../screens/TimelinePage';
 import {PrivacyAIPage} from '../screens/PrivacyAIPage';
+import {WechatBindPage} from '../screens/WechatBindPage';
 
 function renderScreen(name: Frame['name']) {
   switch (name) {
@@ -49,6 +50,8 @@ function renderScreen(name: Frame['name']) {
       return <PrivacyAIPage />;
     case 'timeline':
       return <TimelinePage />;
+    case 'wechatBind':
+      return <WechatBindPage />;
     default:
       return <View style={styles.fallback} />;
   }

@@ -16,7 +16,8 @@ export type ScreenName =
   | 'powerStore'
   | 'profile'
   | 'privacyAi'
-  | 'timeline';
+  | 'timeline'
+  | 'wechatBind';
 
 export interface Frame {
   name: ScreenName;

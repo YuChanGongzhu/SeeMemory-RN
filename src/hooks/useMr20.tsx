@@ -274,9 +274,10 @@ interface Mr20ContextType {
   ) => Promise<void>;
   forgetDevice: () => Promise<void>;
   factoryReset: () => Promise<void>;
-  // 解绑密钥：设备侧 SK&RESET + 后端解绑，不动本机已下载的录音/收件箱数据。
+  // 解绑密钥：设备侧 SK&RESET + 后端解绑，不动本机已下载的录音/收件箱数据，也不动设备本体的录音。
   unbindKey: () => Promise<void>;
-  // 解绑并删除数据：在 unbindKey 基础上，再清掉本机的录音/收件箱/批处理缓存。
+  // 解绑并格式化设备：设备侧发 BLE&RESET（恢复出厂：重置密钥+格式化磁盘，抹掉设备本体录音）
+  // + 后端解绑，比 unbindKey 更彻底、不可逆。不碰手机本地已下载的录音/收件箱/批处理缓存。
   unbindAndDeleteData: () => Promise<void>;
   clearError: () => void;
 }
@@ -1728,7 +1729,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     if (!isMr20NativeAvailable) {
       return; // 原生未链接（模拟器/未构建）：本会话不可能好转，保持占位
     }
-    if (connStateRef.current !== 'idle') {
+    if (connStateRef.current !== 'idle' && connStateRef.current !== 'disconnected') {
       releaseLatch();
       return; // 用户已在手动扫描/连接，让位（其手动流程失败回 idle 后仍可自动重试）
     }
@@ -1753,7 +1754,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
       return;
     }
     // 等待期间用户可能自己发起了扫描/连接，重新让位。
-    if (connStateRef.current !== 'idle') {
+    if (connStateRef.current !== 'idle' && connStateRef.current !== 'disconnected') {
       releaseLatch();
       return;
     }
@@ -1930,11 +1931,44 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
   }, [connState, status, disconnect]);
 
-  /** 解绑并删除数据：在 unbindKey 基础上，再清本机录音/收件箱/批处理缓存（不可逆）。 */
+  /**
+   * 解绑并格式化设备：设备侧发 `BLE&RESET`（恢复出厂：重置密钥 + 格式化磁盘，抹掉设备本体的
+   * 全部录音）+ 后端软删绑定关系。不可逆。
+   *
+   * ⚠️ **只清设备和账号的绑定关系，不碰手机本地已下载的录音/收件箱/批处理缓存**——这条命令
+   * 的操作对象是设备本身，不是手机；本机文件删不删是使用者自己的选择，不该被这条命令顺手
+   * 带走（早先版本把 `clearLocalCache()` 塞在这里一起清，被指出是错的，已去掉）。真要清本机
+   * 缓存得用别的入口。
+   *
+   * 跟 `unbindKey`（只发 `SK&RESET`，只清密钥不动录音）刻意分成两档：普通「解绑密钥」用于
+   * 转手给别人但设备录音还想留着的场景，这条「解绑并格式化设备」才是真正要把设备本体录音
+   * 清空的场景，对应 More 菜单里两个不同二次确认按钮的措辞。
+   *
+   * `BLE&RESET` 本身就会重置密钥（协议：恢复出厂=重置密钥+格式化磁盘，见 `clearPairing`
+   * 里同一条命令的注释），所以这里不用再叠发一次 `SK&RESET`——两条都会让设备当场断链，
+   * 叠着发只是无意义的双重断链。当前连接已经是鉴权过的（`connState==='connected'`），
+   * 不是 `clearPairing` 应对的「被别的密钥锁住」的裸连场景，直接发就行，不用先探测。
+   */
   const unbindAndDeleteData = useCallback(async () => {
-    await unbindKey();
-    await clearLocalCache();
-  }, [unbindKey, clearLocalCache]);
+    const client = clientRef.current;
+    if (!client || connState !== 'connected') {
+      throw new Error('请先连接设备蓝牙');
+    }
+    setError(null);
+    const paired = await getPairedDevice();
+    const uid = paired?.mac || status.mac || paired?.id || '';
+    await client.factoryReset().catch(() => undefined); // BLE&RESET：重置密钥 + 格式化磁盘
+    await clearWifiPassword().catch(() => undefined);
+    await clearWifiProvisionedKey().catch(() => undefined);
+    await clearPairedDevice();
+    setHasPaired(false);
+    await disconnect();
+    if (uid) {
+      await unbindDevice(uid).catch(e => {
+        setError(`设备已格式化，但后端解绑记录未同步（${String((e as Error)?.message || e)}），可稍后重试`);
+      });
+    }
+  }, [connState, status, disconnect]);
 
   const value: Mr20ContextType = {
     screenOpen,

@@ -19,26 +19,31 @@ export function AppVersionGate({children}: {children: ReactNode}) {
     let cancelled = false;
     const platform = Platform.OS === 'ios' ? 'ios' : 'android';
     const versionCode = getAppVersionCode();
+    console.log(`[AppVersionGate] 本机版本 platform=${platform} versionCode=${versionCode}`);
     if (versionCode == null) {
       // 读不到真实版本码：不能当 0 用（会被误判成最旧版本触发强更），直接跳过本次检查
+      console.log('[AppVersionGate] versionCode 为 null，跳过本次检查');
       return;
     }
 
     checkAppVersion(platform, versionCode)
       .then(async res => {
+        console.log('[AppVersionGate] 线上策略返回', JSON.stringify(res));
         if (cancelled) {
           return;
         }
         setResult(res);
         if (!res.forceUpdate && res.updateAvailable && res.latestVersionCode != null) {
           const dismissed = await getDismissedUpdateVersion();
+          console.log(`[AppVersionGate] 已忽略过的版本号=${dismissed}`);
           if (!cancelled && dismissed !== res.latestVersionCode) {
             setSoftPromptVisible(true);
           }
         }
       })
-      .catch(() => {
-        // 版本检查失败不影响正常启动
+      .catch(err => {
+        // 版本检查失败不影响正常启动，但打个日志方便排查
+        console.log('[AppVersionGate] 版本检查请求失败', err);
       });
 
     return () => {

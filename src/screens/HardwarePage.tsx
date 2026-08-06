@@ -45,6 +45,8 @@ import {useAudioPlayback} from '../hooks/useAudioPlayback';
 import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
 import {resolveLocalPath} from '../services/mr20Sync';
 import {scopedKey} from '../services/mr20Scope';
+import {TourTarget} from '../onboarding/TourTarget';
+import {useTour} from '../onboarding/TourContext';
 import {
   getLegacyMigrationInfo,
   migrateLegacyToScope,
@@ -162,6 +164,7 @@ export function HardwarePage() {
   } = useMr20();
   const playback = useAudioPlayback();
   const {userId} = useAuth();
+  const tour = useTour();
 
   const [subPage, setSubPage] = useState<HwSubPage>('main');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null); // 展开查看某天录音
@@ -850,9 +853,16 @@ export function HardwarePage() {
             <Text style={st.migrateTitle}>这台设备还没有绑定到你的账号</Text>
             <Text style={st.migrateSub}>设置一把专属密钥后才能正常同步和转手管理</Text>
           </View>
-          <TouchableOpacity style={st.migrateBtn} onPress={() => setSubPage('wifi')}>
-            <Text style={st.migrateBtnText}>设置密钥</Text>
-          </TouchableOpacity>
+          <TourTarget id="setup-key">
+            <TouchableOpacity
+              style={st.migrateBtn}
+              onPress={() => {
+                setSubPage('wifi');
+                tour.notifyPress('setup-key');
+              }}>
+              <Text style={st.migrateBtnText}>设置密钥</Text>
+            </TouchableOpacity>
+          </TourTarget>
           <TouchableOpacity onPress={cancelNewDevicePairing} hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
             <Text style={st.migrateSub}>暂不</Text>
           </TouchableOpacity>
@@ -877,9 +887,17 @@ export function HardwarePage() {
               </View>
             ))}
           </View>
-          <TouchableOpacity style={st.connectBtn} onPress={pair} disabled={busy}>
-            <Text style={st.connectBtnText}>连接设备</Text>
-          </TouchableOpacity>
+          <TourTarget id="connect-device">
+            <TouchableOpacity
+              style={st.connectBtn}
+              onPress={() => {
+                pair();
+                tour.notifyPress('connect-device');
+              }}
+              disabled={busy}>
+              <Text style={st.connectBtnText}>连接设备</Text>
+            </TouchableOpacity>
+          </TourTarget>
         </ScrollView>
       ) : (
         /* ---- 已配对 dashboard（未连接时为离线态：设备数据隐藏，本地录音照常） ---- */
@@ -917,16 +935,24 @@ export function HardwarePage() {
                       : '设备未连接 · 连接后可同步设备里的录音'}
                   </Text>
                 </View>
-                <TouchableOpacity style={st.reconnectBtn} onPress={reconnect} disabled={busy}>
-                  {busy ? (
-                    <View style={st.reconnectBusy}>
-                      <ActivityIndicator size="small" color="#fff" />
-                      <Text style={st.reconnectBtnText}>正在连接…</Text>
-                    </View>
-                  ) : (
-                    <Text style={st.reconnectBtnText}>{hasPaired ? '重新连接' : '连接设备'}</Text>
-                  )}
-                </TouchableOpacity>
+                <TourTarget id="connect-device">
+                  <TouchableOpacity
+                    style={st.reconnectBtn}
+                    onPress={() => {
+                      reconnect();
+                      tour.notifyPress('connect-device');
+                    }}
+                    disabled={busy}>
+                    {busy ? (
+                      <View style={st.reconnectBusy}>
+                        <ActivityIndicator size="small" color="#fff" />
+                        <Text style={st.reconnectBtnText}>正在连接…</Text>
+                      </View>
+                    ) : (
+                      <Text style={st.reconnectBtnText}>{hasPaired ? '重新连接' : '连接设备'}</Text>
+                    )}
+                  </TouchableOpacity>
+                </TourTarget>
                 {/* 「重新连接」只连已保存的那台，换设备/连别的记忆粒必须还有扫描入口。
                     未配对时上面的主按钮本身就是扫描，不再重复。 */}
                 {hasPaired && !busy ? (
@@ -992,49 +1018,60 @@ export function HardwarePage() {
           </View>
 
           {/* 自动化两格：自动同步 + 自动转文字（独立开关，整格可点） */}
-          <View style={st.autoGrid}>
-            <TouchableOpacity
-              style={st.autoTile}
-              activeOpacity={0.7}
-              onPress={toggleAutoDownload}>
-              <View style={st.autoTileTop}>
-                <View style={[st.autoIcon, autoDownload && st.autoIconOn]}>
-                  <RefreshCw size={16} color={autoDownload ? HW.green : HW.textTertiary} />
+          <TourTarget id="ask-automation">
+            <View style={st.autoGrid}>
+              <TouchableOpacity
+                style={st.autoTile}
+                activeOpacity={0.7}
+                onPress={toggleAutoDownload}>
+                <View style={st.autoTileTop}>
+                  <View style={[st.autoIcon, autoDownload && st.autoIconOn]}>
+                    <RefreshCw size={16} color={autoDownload ? HW.green : HW.textTertiary} />
+                  </View>
+                  <View style={[st.toggle, {backgroundColor: autoDownload ? HW.green : '#E5E5EA'}]}>
+                    <View style={[st.knob, {left: autoDownload ? 22 : 2}]} />
+                  </View>
                 </View>
-                <View style={[st.toggle, {backgroundColor: autoDownload ? HW.green : '#E5E5EA'}]}>
-                  <View style={[st.knob, {left: autoDownload ? 22 : 2}]} />
+                <Text style={st.autoLabel} numberOfLines={1}>自动同步</Text>
+                <Text style={st.autoHint} numberOfLines={1}>新录音自动下载</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={st.autoTile}
+                activeOpacity={0.7}
+                onPress={toggleAutoTranscribe}>
+                <View style={st.autoTileTop}>
+                  <View style={[st.autoIcon, autoTranscribe && st.autoIconOn]}>
+                    <FileText size={16} color={autoTranscribe ? HW.green : HW.textTertiary} />
+                  </View>
+                  <View style={[st.toggle, {backgroundColor: autoTranscribe ? HW.green : '#E5E5EA'}]}>
+                    <View style={[st.knob, {left: autoTranscribe ? 22 : 2}]} />
+                  </View>
                 </View>
-              </View>
-              <Text style={st.autoLabel} numberOfLines={1}>自动同步</Text>
-              <Text style={st.autoHint} numberOfLines={1}>新录音自动下载</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={st.autoTile}
-              activeOpacity={0.7}
-              onPress={toggleAutoTranscribe}>
-              <View style={st.autoTileTop}>
-                <View style={[st.autoIcon, autoTranscribe && st.autoIconOn]}>
-                  <FileText size={16} color={autoTranscribe ? HW.green : HW.textTertiary} />
-                </View>
-                <View style={[st.toggle, {backgroundColor: autoTranscribe ? HW.green : '#E5E5EA'}]}>
-                  <View style={[st.knob, {left: autoTranscribe ? 22 : 2}]} />
-                </View>
-              </View>
-              <Text style={st.autoLabel} numberOfLines={1}>自动转文字</Text>
-              <Text style={st.autoHint} numberOfLines={1}>下载后自动转写</Text>
-            </TouchableOpacity>
-          </View>
+                <Text style={st.autoLabel} numberOfLines={1}>自动转文字</Text>
+                <Text style={st.autoHint} numberOfLines={1}>下载后自动转写</Text>
+              </TouchableOpacity>
+            </View>
+          </TourTarget>
 
           {/* 录音列表 */}
-          <View style={st.listHead}>
-            <Text style={st.listTitle}>我的录音</Text>
-            {/* 设备文件页要发 BLE 列目录命令，没连上进去只有一句提示——离线时不给这个死胡同入口 */}
-            {connected ? (
-              <TouchableOpacity style={st.downloadAll} onPress={() => setSubPage('deviceFiles')}>
-                <Text style={st.downloadAllText}>设备文件</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
+          <TourTarget id="view-recordings">
+            <View style={st.listHead}>
+              <Text style={st.listTitle}>我的录音</Text>
+              {/* 设备文件页要发 BLE 列目录命令，没连上进去只有一句提示——离线时不给这个死胡同入口 */}
+              {connected ? (
+                <TourTarget id="device-files">
+                  <TouchableOpacity
+                    style={st.downloadAll}
+                    onPress={() => {
+                      setSubPage('deviceFiles');
+                      tour.notifyPress('device-files');
+                    }}>
+                    <Text style={st.downloadAllText}>设备文件</Text>
+                  </TouchableOpacity>
+                </TourTarget>
+              ) : null}
+            </View>
+          </TourTarget>
 
           {inbox.length === 0 ? (
             <Text style={st.empty}>
@@ -1148,12 +1185,23 @@ export function HardwarePage() {
             <Text style={st.sheetRowText}>设备设置</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={st.sheetRow}
+            style={[st.sheetRow, st.sheetRowBorder]}
             onPress={() => {
               setMoreOpen(false);
               setDisconnectAsk(true);
             }}>
             <Text style={st.sheetRowText}>断开连接</Text>
+          </TouchableOpacity>
+          {/* 调试用：重新走一遍新手引导。先回主页，不然第一步「点侧边栏」的
+              目标（Header 里的按钮）在这个页面根本不存在，只会看到浮动提示卡。 */}
+          <TouchableOpacity
+            style={st.sheetRow}
+            onPress={() => {
+              setMoreOpen(false);
+              nav.home();
+              tour.restart();
+            }}>
+            <Text style={st.sheetRowText}>查看指导</Text>
           </TouchableOpacity>
         </View>
         <View style={[st.sheetCard, {marginTop: 12}]}>
@@ -1171,7 +1219,7 @@ export function HardwarePage() {
               setMoreOpen(false);
               setUnbindDeleteAsk(true);
             }}>
-            <Text style={[st.sheetRowText, {color: HW.red}]}>解绑并删除数据</Text>
+            <Text style={[st.sheetRowText, {color: HW.red}]}>解绑并格式化设备</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity style={[st.sheetCard, {marginTop: 12}]} onPress={() => setMoreOpen(false)}>
@@ -1224,18 +1272,18 @@ export function HardwarePage() {
         ]}
       />
 
-      {/* 解绑并删除数据确认（更高危）：在解绑密钥基础上，再清本机录音/收件箱缓存 */}
+      {/* 解绑并格式化确认（更高危）：设备侧格式化磁盘 + 解绑。不碰手机本地已下载的录音 */}
       <IosAlert
         visible={unbindDeleteAsk}
         onClose={() => setUnbindDeleteAsk(false)}
-        title="确定解绑并删除数据？"
+        title="确定解绑并格式化设备？"
         titleColor={HW.red}
         icon={<AlertTriangle size={32} color={HW.red} />}
-        message="除了清除设备密钥并与账号解绑外，还会删除本机已下载的录音、收件箱和处理记录，操作不可撤销。"
+        message="会与账号解绑，并格式化设备存储，清空设备上的全部录音，操作不可撤销。已下载到手机的录音文件不受影响。"
         buttons={[
           {text: '取消', onPress: () => setUnbindDeleteAsk(false)},
           {
-            text: '解绑并删除',
+            text: '解绑并格式化',
             danger: true,
             onPress: () => {
               setUnbindDeleteAsk(false);

@@ -57,18 +57,6 @@ target 'RingMemoryApp' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  # Rokid CXR-L SDK integration.
-  # The Rokid SDK (RGCxrClient/RGCoreKit) ships device-only framework slices and
-  # cannot build for the iOS Simulator. Set RN_SIMULATOR=1 before `pod install`
-  # to exclude it for simulator builds; the JS layer (src/native/RokidModule.ts)
-  # already falls back to a no-op when the native module is absent. Device builds
-  # (the default, no env var) keep the full Rokid integration unchanged.
-  unless ENV['RN_SIMULATOR'] == '1'
-    pod 'RTNRokidModule', :path => './LocalPods/RTNRokidModule'
-    pod 'RGCxrClient'
-    pod 'RGCoreKit'
-  end
-
   post_install do |installer|
     react_native_post_install(
       installer,
