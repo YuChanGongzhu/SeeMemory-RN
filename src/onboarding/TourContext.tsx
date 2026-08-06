@@ -25,7 +25,6 @@ interface TourContextValue {
   unregisterTarget: (id: string) => void;
   notifyPress: (id: string) => void;
   advance: () => void;
-  skip: () => void;
   finish: () => void;
   /** 不管有没有走完过，直接从头开始——目前只给「查看指导」调试入口用。 */
   restart: () => void;
@@ -48,7 +47,7 @@ function resolveVisibleIndex(fromIndex: number, needsKeySetup: boolean): number 
 }
 
 export function TourProvider({children}: {children: React.ReactNode}) {
-  const {connState, needsKeySetup, syncing, wifiPhase} = useMr20();
+  const {connState, needsKeySetup, syncing, wifiPhase, recording} = useMr20();
   const [stepIndex, setStepIndex] = useState(-1);
   const targetsRef = useRef<Map<string, {mount: StepMount; rect: TourRect}>>(new Map());
   // 只用来在 target 注册/反注册时让下面的 useMemo 换一个新的 value 引用——
@@ -90,8 +89,6 @@ export function TourProvider({children}: {children: React.ReactNode}) {
     });
   }, []);
 
-  const skip = finish;
-
   const restart = useCallback(() => {
     setStepIndex(resolveVisibleIndex(0, needsKeySetupRef.current));
   }, []);
@@ -118,14 +115,46 @@ export function TourProvider({children}: {children: React.ReactNode}) {
 
   const getTargetRect = useCallback((id: string) => targetsRef.current.get(id)?.rect, []);
 
-  // 等待型步骤：进入该步骤时业务状态必然是「未达成」（因为都是紧跟在触发它的
-  // tap 步骤之后），所以直接判目标状态本身，不需要额外的 busy→idle 边沿检测。
+  // 'recorded' 靠设备物理按键触发，进这一步时录没录不确定，不能像其它等待步骤
+  // 那样直接判目标值——万一进来时设备恰好已经在录，会被误判成「已完成」。
+  const wasRecordingRef = useRef(false);
+
+  // 等待型步骤：'keyBound'/'uploadDone' 都紧跟在触发它的 tap 步骤之后，进入时
+  // 业务状态必然是「未达成」，直接判目标值即可；'connected'/'recorded' 单独
+  // 处理，见各自分支的注释。
   useEffect(() => {
     if (!currentStep || currentStep.kind !== 'wait') {
+      wasRecordingRef.current = false;
       return;
     }
+    if (currentStep.waitKey === 'connected') {
+      if (connState !== 'connected') {
+        return;
+      }
+      if (needsKeySetup) {
+        // 已经查到需要设置密钥，不用再等，直接走——下一步 resolveVisibleIndex
+        // 会正确地不跳过 setup-key/wait-key。
+        advance();
+        return;
+      }
+      // needsKeySetup 还是 false：可能是真已绑定过，也可能是连接建立后台那次
+      // checkDeviceBinding（BLE 读 MAC + 查后端）还没跑完。连上的瞬间就立刻
+      // resolveVisibleIndex 会拿到一个还没更新的 needsKeySetup，把「设置密钥」
+      // 两步整个误判成「已绑定」跳过去——给个宽限期，真等到了就走快速路径。
+      const timer = setTimeout(advance, 1500);
+      return () => clearTimeout(timer);
+    }
+    if (currentStep.waitKey === 'recorded') {
+      if (recording) {
+        wasRecordingRef.current = true;
+      } else if (wasRecordingRef.current) {
+        wasRecordingRef.current = false;
+        advance();
+      }
+      return;
+    }
+    wasRecordingRef.current = false;
     const reached =
-      (currentStep.waitKey === 'connected' && connState === 'connected') ||
       (currentStep.waitKey === 'keyBound' && !needsKeySetup) ||
       (currentStep.waitKey === 'uploadDone' &&
         !syncing &&
@@ -134,7 +163,7 @@ export function TourProvider({children}: {children: React.ReactNode}) {
     if (reached) {
       advance();
     }
-  }, [currentStep, connState, needsKeySetup, syncing, wifiPhase, advance]);
+  }, [currentStep, connState, needsKeySetup, syncing, wifiPhase, recording, advance]);
 
   const value = useMemo<TourContextValue>(
     () => ({
@@ -144,12 +173,11 @@ export function TourProvider({children}: {children: React.ReactNode}) {
       unregisterTarget,
       notifyPress,
       advance,
-      skip,
       finish,
       restart,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- targetsVersion 只用来强制换引用，故意不进 value 本身
-    [currentStep, getTargetRect, registerTarget, unregisterTarget, notifyPress, advance, skip, finish, restart, targetsVersion],
+    [currentStep, getTargetRect, registerTarget, unregisterTarget, notifyPress, advance, finish, restart, targetsVersion],
   );
 
   return <TourContext.Provider value={value}>{children}</TourContext.Provider>;

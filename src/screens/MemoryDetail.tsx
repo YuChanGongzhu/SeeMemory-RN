@@ -1,5 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Alert} from 'react-native';
+import Svg, {Line} from 'react-native-svg';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {
   ChevronLeft, Share2, MoreHorizontal, Sparkles, ChevronDown, PenLine, Plus, Trash2,
@@ -239,14 +240,20 @@ export function MemoryDetail() {
 
             <View style={styles.tlBody}>
               {clusters.length ? (
-                clusters.map((c, i) => {
+                <>
+                  {/* One continuous dashed spine for the whole list — matches app-prototype's
+                      single full-height line (DetailViewV2.jsx), instead of a dash-per-row
+                      that broke the pattern and left a gap at every dot. */}
+                  <Svg style={styles.railLine} width="100%" height="100%">
+                    <Line x1="50%" y1="0" x2="50%" y2="100%" stroke="rgba(0,0,0,0.15)" strokeWidth={1.5} strokeDasharray="2,4" />
+                  </Svg>
+                  {clusters.map((c, i) => {
                   if (!c.name) {
                     const node = c.items[0];
                     return (
                       <View key={node.id ?? i} style={styles.tlRow}>
                         <View style={styles.rail}>
                           <View style={styles.dotHollow} />
-                          <View style={styles.railLine} />
                         </View>
                         <View style={{flex: 1, minWidth: 0}}>
                           <View style={styles.tlMeta}>
@@ -302,7 +309,8 @@ export function MemoryDetail() {
                       ) : null}
                     </View>
                   );
-                })
+                  })}
+                </>
               ) : (
                 <Text style={styles.empty}>暂无记录</Text>
               )}
@@ -419,8 +427,12 @@ const styles = StyleSheet.create({
   tlRow: {flexDirection: 'row', gap: 16},
   rail: {width: 10},
   dotHollow: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.nested, borderWidth: 2, borderColor: colors.textMain, marginTop: 4},
-  // Bleeds `bottom: -24` past its own row to bridge tlBody's row `gap`, so the dash reaches the next dot uninterrupted.
-  railLine: {position: 'absolute', left: 4.25, top: 14, bottom: -24, width: 0, borderLeftWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', borderStyle: 'dashed'},
+  // One continuous line spanning the whole tlBody (not per-row) so the dash pattern never
+  // restarts at a dot — matches app-prototype's single full-height rail. left = tlBody's own
+  // paddingLeft (12) + the rail's dot-center offset (5), inset by half the line's own width.
+  // Drawn with react-native-svg rather than borderStyle: 'dashed' — RN doesn't render single-side
+  // dashed/dotted borders reliably on iOS (facebook/react-native#24224), so it showed as a solid line.
+  railLine: {position: 'absolute', left: 15.5, top: 0, bottom: 0, width: 3},
   dotHollowGray: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.nested, borderWidth: 2, borderColor: colors.textSub, marginTop: 4, marginLeft: -4},
   tlMeta: {flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8},
   tlTime: {fontSize: 12, fontWeight: '600', color: colors.textSub},

@@ -21,7 +21,7 @@ const PAD = 8;
 const EDGE_MARGIN = 60;
 
 export function TourSpotlight({mount}: {mount: StepMount}) {
-  const {currentStep, getTargetRect, advance, skip, finish} = useTour();
+  const {currentStep, getTargetRect, advance, finish} = useTour();
   const insets = useSafeAreaInsets();
   const opacity = useSharedValue(0);
   const active = currentStep?.mount === mount;
@@ -40,12 +40,22 @@ export function TourSpotlight({mount}: {mount: StepMount}) {
   const rawRect = currentStep.targetId ? getTargetRect(currentStep.targetId) : undefined;
   const onScreen = !!rawRect && rawRect.y + rawRect.height > EDGE_MARGIN && rawRect.y < screenH - EDGE_MARGIN;
 
-  const handleSkip = () => skip();
+  // 「跳过」永远都在，任何一步卡住都能手动往下走——只前进一步，不结束整个
+  // 引导（advance 走到最后一步自然会收尾）。
+  // 主按钮只在两种情况额外出现：info 步骤自带的「下一步」/「完成引导」，或者
+  // 标了 manualCompleteLabel 的步骤（目前是 record-audio/check-ota——设备物理
+  // 操作或第三方状态，App 里没有对应可点目标 / 检测不到）。其它 tap/wait 步骤
+  // 不给这个主按钮：tap 步骤本来就该点真实按钮，其它 wait 步骤都紧跟着 App 内
+  // 操作，给了手动完成反而怂恿用户跳过真正该做的事——但「跳过」这个次要出口
+  // 还是留着。
+  const ctaLabel = currentStep.kind === 'info' ? (currentStep.ctaLabel ?? '下一步') : currentStep.manualCompleteLabel;
+  const showCta = !!ctaLabel;
   const handleCta = () => (currentStep.isFinal ? finish() : advance());
+  const handleSkip = () => advance();
 
   if (!onScreen) {
     return (
-      <Animated.View pointerEvents="box-none" style={[styles.fallbackWrap, {top: insets.top + space.md}, fadeStyle]}>
+      <Animated.View pointerEvents="box-none" style={[styles.fallbackWrap, {top: insets.top + 72}, fadeStyle]}>
         <View style={styles.fallbackCard}>
           <Text style={styles.fallbackText} numberOfLines={2}>
             {currentStep.fallbackText}
@@ -53,6 +63,11 @@ export function TourSpotlight({mount}: {mount: StepMount}) {
           <Pressable onPress={handleSkip} hitSlop={8}>
             <Text style={styles.fallbackSkip}>跳过</Text>
           </Pressable>
+          {showCta ? (
+            <Pressable onPress={handleCta} style={styles.fallbackBtn} hitSlop={8}>
+              <Text style={styles.fallbackBtnText}>{ctaLabel}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </Animated.View>
     );
@@ -93,11 +108,11 @@ export function TourSpotlight({mount}: {mount: StepMount}) {
         <Text style={styles.bubbleBody}>{currentStep.body}</Text>
         <View style={styles.bubbleFooter}>
           <Pressable onPress={handleSkip} hitSlop={8}>
-            <Text style={styles.skipLink}>跳过引导</Text>
+            <Text style={styles.skipLink}>跳过</Text>
           </Pressable>
-          {currentStep.kind === 'info' ? (
+          {showCta ? (
             <Pressable onPress={handleCta} style={styles.ctaBtn} hitSlop={8}>
-              <Text style={styles.ctaText}>{currentStep.ctaLabel ?? '下一步'}</Text>
+              <Text style={styles.ctaText}>{ctaLabel}</Text>
             </Pressable>
           ) : null}
         </View>
@@ -157,5 +172,12 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   fallbackText: {fontSize: 13, color: '#fff', fontWeight: '500', flexShrink: 1},
-  fallbackSkip: {fontSize: 13, color: 'rgba(255,255,255,0.7)', fontWeight: '600'},
+  fallbackSkip: {fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600'},
+  fallbackBtn: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: radius.pill,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  fallbackBtnText: {fontSize: 12, color: '#fff', fontWeight: '600'},
 });

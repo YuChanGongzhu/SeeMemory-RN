@@ -46,6 +46,7 @@ import {itemEpoch, type Mr20InboxItem} from '../services/mr20Ingest';
 import {resolveLocalPath} from '../services/mr20Sync';
 import {scopedKey} from '../services/mr20Scope';
 import {TourTarget} from '../onboarding/TourTarget';
+import {TourSpotlight} from '../onboarding/TourSpotlight';
 import {useTour} from '../onboarding/TourContext';
 import {
   getLegacyMigrationInfo,
@@ -54,7 +55,8 @@ import {
 } from '../services/mr20Migrate';
 import {useAuth} from '../auth/AuthContext';
 import {fmtDurationHuman as fmtHuman, fmtSize as fmtMB} from '../services/mediaFormat';
-import {IosAlert, SubHeader, HW, type HwSubPage} from './hardware/parts';
+import {IosAlert, ModalInput, SubHeader, HW, type HwSubPage} from './hardware/parts';
+import {MR20_KEY_LEN} from '../native/mr20/protocol';
 import {DeviceSettings} from './hardware/DeviceSettings';
 import {WifiManage} from './hardware/WifiManage';
 import {DeviceFiles} from './hardware/DeviceFiles';
@@ -147,6 +149,7 @@ export function HardwarePage() {
     startScan,
     stopScan,
     connectAndPair,
+    retryWithManualKey,
     cancelNewDevicePairing,
     reconnectSaved,
     disconnect,
@@ -174,6 +177,9 @@ export function HardwarePage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<Mr20InboxItem | null>(null); // 查看录音转写全文
   const [disconnectAsk, setDisconnectAsk] = useState(false);
+  const [manualKeyAsk, setManualKeyAsk] = useState(false);
+  const [manualKeyDraft, setManualKeyDraft] = useState('');
+  const [manualKeyBusy, setManualKeyBusy] = useState(false);
   const [unbindKeyAsk, setUnbindKeyAsk] = useState(false);
   const [unbindDeleteAsk, setUnbindDeleteAsk] = useState(false);
   const [alias, setAlias] = useState('');
@@ -195,6 +201,9 @@ export function HardwarePage() {
 
   const connected = connState === 'connected';
   const busy = connState === 'scanning' || connState === 'connecting' || connState === 'pairing';
+  // 判断当前 error 是不是「密钥全被拒(SK&ERR)」这种——只有这种才给「手动输入旧密钥」入口，
+  // 靠错误文案里固定带的 SK&ERR 标记识别，见 useMr20.tsx authenticateOrGuide/connectAndPair。
+  const keyRejected = !!error && error.includes('SK&ERR');
   // 营销首屏只留给「真·新用户」：没配过设备且本地一条录音都没有。
   // 配过设备（或手里有本地录音）的用户即使当前没连上，也要进 dashboard——
   // 「我的录音」是纯本地数据（AsyncStorage + Documents），离线完全可播可上传转写，
@@ -804,18 +813,33 @@ export function HardwarePage() {
           <ChevronLeft size={26} color={HW.textMain} />
         </TouchableOpacity>
         <Text style={st.headerTitle}>我的设备</Text>
-        <TouchableOpacity
-          style={st.headerBtn}
-          disabled={!connected}
-          onPress={() => setMoreOpen(true)}>
-          <MoreHorizontal size={24} color={HW.textMain} style={{opacity: connected ? 1 : 0.3}} />
-        </TouchableOpacity>
+        <TourTarget id="open-more">
+          <TouchableOpacity
+            style={st.headerBtn}
+            disabled={!connected}
+            onPress={() => {
+              setMoreOpen(true);
+              tour.notifyPress('open-more');
+            }}>
+            <MoreHorizontal size={24} color={HW.textMain} style={{opacity: connected ? 1 : 0.3}} />
+          </TouchableOpacity>
+        </TourTarget>
       </View>
 
       {error ? (
         <TouchableOpacity style={st.errorBar} onPress={clearError} activeOpacity={0.8}>
           <AlertCircle size={16} color="#fff" />
           <Text style={st.errorText} numberOfLines={3}>{error}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {keyRejected ? (
+        <TouchableOpacity
+          style={st.manualKeyLink}
+          onPress={() => {
+            setManualKeyDraft('');
+            setManualKeyAsk(true);
+          }}>
+          <Text style={st.manualKeyLinkText}>手动输入旧密钥重连</Text>
         </TouchableOpacity>
       ) : null}
 
@@ -1176,34 +1200,29 @@ export function HardwarePage() {
       {/* More 菜单 */}
       <BottomSheet visible={moreOpen} onClose={() => setMoreOpen(false)}>
         <View style={st.sheetCard}>
+          <TourTarget id="open-device-settings" mount="more">
+            <TouchableOpacity
+              style={[st.sheetRow, st.sheetRowBorder]}
+              onPress={() => {
+                setMoreOpen(false);
+                setSubPage('settings');
+                tour.notifyPress('open-device-settings');
+              }}>
+              <Text style={st.sheetRowText}>设备设置</Text>
+            </TouchableOpacity>
+          </TourTarget>
           <TouchableOpacity
-            style={[st.sheetRow, st.sheetRowBorder]}
-            onPress={() => {
-              setMoreOpen(false);
-              setSubPage('settings');
-            }}>
-            <Text style={st.sheetRowText}>设备设置</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[st.sheetRow, st.sheetRowBorder]}
+            style={st.sheetRow}
             onPress={() => {
               setMoreOpen(false);
               setDisconnectAsk(true);
             }}>
             <Text style={st.sheetRowText}>断开连接</Text>
           </TouchableOpacity>
-          {/* 调试用：重新走一遍新手引导。先回主页，不然第一步「点侧边栏」的
-              目标（Header 里的按钮）在这个页面根本不存在，只会看到浮动提示卡。 */}
-          <TouchableOpacity
-            style={st.sheetRow}
-            onPress={() => {
-              setMoreOpen(false);
-              nav.home();
-              tour.restart();
-            }}>
-            <Text style={st.sheetRowText}>查看指导</Text>
-          </TouchableOpacity>
         </View>
+        {/* 「更多」也是靠 Modal 渲染的独立原生层，跟 AppDrawer 一样根部 overlay 盖不上来，
+            高亮层只能挂在这个 Modal 内容里。 */}
+        <TourSpotlight mount="more" />
         <View style={[st.sheetCard, {marginTop: 12}]}>
           <TouchableOpacity
             style={[st.sheetRow, st.sheetRowBorder]}
@@ -1293,6 +1312,58 @@ export function HardwarePage() {
         ]}
       />
 
+      {/* SK&ERR 后手动输入旧密钥重连：候选列表（后端登记 + 本机缓存）都被设备拒绝时的兜底，
+          不强校验格式——设备端 toDeviceKey 只是截前 8 位，短一点的旧密钥原样发也无妨，
+          对不对由设备的 SK_OK/SK_ERR 说了算。 */}
+      <IosAlert
+        visible={manualKeyAsk}
+        onClose={() => {
+          if (manualKeyBusy) {
+            return;
+          }
+          setManualKeyAsk(false);
+        }}
+        title="手动输入旧密钥"
+        message={`试试这台设备以前绑定过的密钥（最多 ${MR20_KEY_LEN} 位），连上后会自动存为本机密码。`}
+        buttons={[
+          {
+            text: '取消',
+            onPress: () => {
+              if (!manualKeyBusy) {
+                setManualKeyAsk(false);
+              }
+            },
+          },
+          {
+            text: manualKeyBusy ? '连接中…' : '连接',
+            bold: true,
+            onPress: () => {
+              if (manualKeyBusy) {
+                return;
+              }
+              const key = manualKeyDraft.trim();
+              if (!key) {
+                return;
+              }
+              setManualKeyBusy(true);
+              retryWithManualKey(key)
+                .then(() => setManualKeyAsk(false))
+                .catch(() => undefined)
+                .finally(() => setManualKeyBusy(false));
+            },
+          },
+        ]}>
+        <ModalInput
+          value={manualKeyDraft}
+          onChangeText={setManualKeyDraft}
+          placeholder="如 12345678"
+          autoCapitalize="none"
+          autoCorrect={false}
+          maxLength={MR20_KEY_LEN}
+          editable={!manualKeyBusy}
+        />
+      </IosAlert>
+
       {/* 非阻塞传输浮标：从设备文件页发起同步后返回主页仍能看到进度、继续操作 */}
       <TransferBadge />
     </View>
@@ -1321,6 +1392,8 @@ const st = StyleSheet.create({
   migrateBtnDisabled: {backgroundColor: HW.textTertiary},
   migrateBtnText: {color: '#fff', fontSize: 14, fontWeight: '700'},
   errorText: {flex: 1, color: '#fff', fontSize: 13, lineHeight: 18},
+  manualKeyLink: {alignSelf: 'flex-start', marginLeft: 16, marginTop: 8},
+  manualKeyLinkText: {color: HW.blue, fontSize: 13, fontWeight: '600'},
 
   // 未配对
   unpairedBody: {padding: 20, alignItems: 'center'},

@@ -4,6 +4,8 @@ import {ScrollView, StyleSheet, View} from 'react-native';
 import {Clock, Cloud, Info, Mic, Wifi} from 'lucide-react-native';
 import {SubHeader, Card, MenuRow, HW, type HwSubPage} from './parts';
 import {useMr20} from '../../hooks/useMr20';
+import {TourTarget} from '../../onboarding/TourTarget';
+import {useTour} from '../../onboarding/TourContext';
 
 export function DeviceSettings({
   onBack,
@@ -13,6 +15,7 @@ export function DeviceSettings({
   onNavigate: (sub: HwSubPage) => void;
 }) {
   const {status} = useMr20();
+  const tour = useTour();
   const modeLabel = status.recMode === 'call' ? '通话模式' : '对话模式';
 
   return (
@@ -36,12 +39,17 @@ export function DeviceSettings({
             value={modeLabel}
             onPress={() => onNavigate('recordMode')}
           />
-          <MenuRow
-            icon={<Cloud size={20} color={HW.textMain} />}
-            label="系统更新"
-            value={status.firmware || 'V1.0'}
-            onPress={() => onNavigate('ota')}
-          />
+          <TourTarget id="open-ota">
+            <MenuRow
+              icon={<Cloud size={20} color={HW.textMain} />}
+              label="系统更新"
+              value={status.firmware || 'V1.0'}
+              onPress={() => {
+                onNavigate('ota');
+                tour.notifyPress('open-ota');
+              }}
+            />
+          </TourTarget>
           <MenuRow
             icon={<Info size={20} color={HW.textMain} />}
             label="关于设备"

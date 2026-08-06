@@ -13,12 +13,14 @@ import {HW, IosAlert} from './hardware/parts';
 import {EnvSwitchSheet} from '../ui/EnvSwitchSheet';
 import {WechatBindSheet} from '../ui/WechatBindSheet';
 import {useWechatHealth} from '../hooks/useWechatHealth';
+import {useTour} from '../onboarding/TourContext';
 
 const APP_VERSION = '0.1.0';
 
 /** 个人信息 — Prototype ProfileSettingsPage (App.jsx:3061). */
 export function ProfilePage() {
   const nav = useNav();
+  const tour = useTour();
   const insets = useSafeAreaInsets();
   const {user, logout, deleteAccount, isGuest} = useAuth();
   const [editing, setEditing] = useState(false);
@@ -158,6 +160,20 @@ export function ProfilePage() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.row} onPress={() => void Linking.openURL(PRIVACY_POLICY_URL)}>
             <Text style={styles.rowLabel}>隐私政策</Text>
+            <ChevronRight size={16} color={colors.textSub} />
+          </TouchableOpacity>
+        </View>
+
+        {/* 调试用：重新走一遍新手引导。先回主页——第一步高亮的侧边栏按钮在
+            「个人信息」这个子页里不存在，只有回到首页才测得到真实位置。 */}
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => {
+              nav.home();
+              tour.restart();
+            }}>
+            <Text style={styles.rowLabel}>查看指导</Text>
             <ChevronRight size={16} color={colors.textSub} />
           </TouchableOpacity>
         </View>

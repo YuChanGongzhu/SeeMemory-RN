@@ -5,9 +5,9 @@
  * 业务状态自动前进（见 [[mr20-sk-binding-key]] [[mr20-account-binding-flow]]）。
  */
 
-export type StepMount = 'root' | 'drawer';
+export type StepMount = 'root' | 'drawer' | 'more';
 export type StepKind = 'tap' | 'wait' | 'info';
-export type WaitKey = 'connected' | 'keyBound' | 'uploadDone';
+export type WaitKey = 'connected' | 'keyBound' | 'recorded' | 'uploadDone';
 
 export interface TourStep {
   id: string;
@@ -26,6 +26,13 @@ export interface TourStep {
   ctaLabel?: string;
   /** info 步骤按钮是否直接结束引导（而不是前进到下一步）。 */
   isFinal?: boolean;
+  /**
+   * 手动完成按钮的文案——只给「设备物理操作、App 内没有对应可点目标、检测又
+   * 可能不够可靠」的步骤用（目前只有 record-audio）。其余步骤别加：tap 步骤
+   * 已经有真实按钮可点，其它 wait 步骤都是紧跟着 App 内操作触发的，加了反而
+   * 会诱使用户跳过真正该做的事。
+   */
+  manualCompleteLabel?: string;
 }
 
 export const TOUR_STEPS: TourStep[] = [
@@ -66,6 +73,42 @@ export const TOUR_STEPS: TourStep[] = [
     fallbackText: '正在连接记忆粒，请稍候…',
   },
   {
+    id: 'open-more',
+    mount: 'root',
+    kind: 'tap',
+    targetId: 'open-more',
+    title: '更多',
+    body: '点右上角「更多」，先看看设备有没有固件更新',
+    fallbackText: '点右上角「更多」',
+  },
+  {
+    id: 'open-device-settings',
+    mount: 'more',
+    kind: 'tap',
+    targetId: 'open-device-settings',
+    title: '设备设置',
+    body: '点「设备设置」',
+    fallbackText: '点「设备设置」',
+  },
+  {
+    id: 'open-ota',
+    mount: 'root',
+    kind: 'tap',
+    targetId: 'open-ota',
+    title: '系统更新',
+    body: '点「系统更新」查看固件版本',
+    fallbackText: '点「系统更新」查看固件版本',
+  },
+  {
+    id: 'check-ota',
+    mount: 'root',
+    kind: 'wait',
+    title: '检查固件更新',
+    body: '有更新就升级到最新固件；没有更新可以直接完成这一步',
+    fallbackText: '检查一下有没有固件更新，有就升级，没有可以直接完成这一步',
+    manualCompleteLabel: '已完成该步骤',
+  },
+  {
     id: 'setup-key',
     mount: 'root',
     kind: 'tap',
@@ -84,6 +127,16 @@ export const TOUR_STEPS: TourStep[] = [
     body: '完成设置后点返回即可，这里会自动继续引导',
     fallbackText: '完成密钥设置后点返回，引导会自动继续',
     skipWhenKeyAlreadyBound: true,
+  },
+  {
+    id: 'record-audio',
+    mount: 'root',
+    kind: 'wait',
+    waitKey: 'recorded',
+    title: '录一段声音',
+    body: '在记忆粒上按录音键，说几句话再停止——这样「设备文件」里才有内容可传',
+    fallbackText: '在记忆粒上录一段声音，录完停止后引导会自动继续',
+    manualCompleteLabel: '已完成该步骤',
   },
   {
     id: 'device-files',

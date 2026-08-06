@@ -356,9 +356,6 @@ export function HomeHub() {
                   card={card}
                   blurred={blurred}
                   onPress={() => (blurred ? undefined : nav.push('memoryDetail', {card}))}
-                  onShare={() => {}}
-                  onEdit={writable ? () => gate(() => nav.push('editor', {mode: 'edit', card})) : undefined}
-                  onAppend={writable ? () => gate(() => nav.push('editor', {mode: 'append', card})) : undefined}
                   onDelete={writable ? () => gate(() => deleteCard(card)) : undefined}
                 />
               </View>

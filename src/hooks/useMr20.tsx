@@ -174,7 +174,10 @@ interface Mr20ContextType {
   // 动作
   startScan: () => Promise<void>;
   stopScan: () => void;
-  connectAndPair: (deviceId: string, name: string) => Promise<void>;
+  connectAndPair: (deviceId: string, name: string, manualKey?: string) => Promise<void>;
+  // 用户在 SK&ERR 提示下手动输入一把旧密钥重试：重连上一次尝试过的设备，跳过裸连探测/
+  // 候选列表，直接用这把 key 鉴权。没有可重连目标（还没扫描/连接过）时写错误提示。
+  retryWithManualKey: (key: string) => Promise<void>;
   // 用户不想现在设置：只清提示，不断开连接，下次重连还会再提示一次。
   cancelNewDevicePairing: () => void;
   // 空白设备首次设密钥：向后端登记这台设备并拿回它签发的密钥（不接受客户端自定义值），
@@ -312,6 +315,7 @@ const Mr20Context = createContext<Mr20ContextType>({
   startScan: noop,
   stopScan: () => {},
   connectAndPair: noop,
+  retryWithManualKey: noop,
   cancelNewDevicePairing: () => {},
   issueBackendKey: async () => null,
   reconnectSaved: noop,
@@ -551,6 +555,10 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     }
   }, []);
 
+  // 最近一次尝试连接的设备（不论成败）：SK&ERR 后用户手动输入旧密钥重试时，
+  // 不用再重新扫描一遍，直接对着这台设备重连。
+  const lastAttemptRef = useRef<{id: string; name: string} | null>(null);
+
   // 自动重连：每个 App 会话只自动跑一次；connStateRef 供重连状态机读取实时连接态
   // （避免闭包读到旧值）。
   const reconnectStartedRef = useRef(false);
@@ -638,38 +646,65 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
   }, []);
 
   const connectAndPair = useCallback(
-    async (deviceId: string, name: string) => {
+    async (deviceId: string, name: string, manualKey?: string) => {
       setError(null);
       const client = getClient();
+      lastAttemptRef.current = {id: deviceId, name};
       try {
         await client.connect(deviceId, name);
 
-        // 最简连接：先**不发任何密钥**，裸连探测设备是否响应只读指令（FW）。
-        // 很多固件并不强制 SK——能直接读到就免密钥用，这是最稳的连接路径，
-        // 也避免把本可直接用的设备卡在 SK&ERR 上。
-        const openWithoutKey = await client.probe();
-        if (openWithoutKey) {
-          client.markConnected(); // 免密钥直接就绪
+        if (manualKey) {
+          // 用户在 SK&ERR 提示下手动指定了一把旧密钥：直接拿它鉴权，不再裸连探测，
+          // 也不再走后端/本地候选列表——那些在上一轮已经试过、全部被拒了。
+          await client.authenticate(manualKey);
         } else {
-          // 设备对裸连静默 → 退回 SK 握手兜底。
-          await authenticateOrGuide(client);
+          // 最简连接：先**不发任何密钥**，裸连探测设备是否响应只读指令（FW）。
+          // 很多固件并不强制 SK——能直接读到就免密钥用，这是最稳的连接路径，
+          // 也避免把本可直接用的设备卡在 SK&ERR 上。
+          const openWithoutKey = await client.probe();
+          if (openWithoutKey) {
+            client.markConnected(); // 免密钥直接就绪
+          } else {
+            // 设备对裸连静默 → 退回 SK 握手兜底。
+            await authenticateOrGuide(client);
+          }
         }
 
         // 记的密钥同样以用户设过的为准，不再兜底共享默认值——openWithoutKey 时设备当前
         // 确实没有生效的密钥，记一个假的 MR20_PAIR_KEY 反而是错误信息（见 authenticateOrGuide
         // 上方注释）。真没有就存空字符串，等用户走「重置密钥后重新配网」再补上真值。
-        const usedKey = (await getWifiPassword().catch(() => null)) || '';
+        if (manualKey) {
+          await saveWifiPassword(manualKey).catch(() => undefined);
+        }
+        const usedKey = manualKey || (await getWifiPassword().catch(() => null)) || '';
         await savePairedDevice({id: deviceId, name, key: usedKey});
         setHasPaired(true);
         client.syncTime().catch(() => undefined);
       } catch (e) {
-        setError(String((e as Error)?.message || e));
+        const msg = String((e as Error)?.message || e);
+        setError(
+          manualKey && msg === 'SK_ERR'
+            ? '这把密钥也被设备拒绝了（SK&ERR），不是它当前绑定的密钥。可以再试别的旧密钥，或到「WiFi 管理」用「重置密钥后重新配网」。'
+            : msg,
+        );
         // 失败收尾：断开回到可重试的扫描态，避免卡在「配对中」忙态。
         await client.disconnect().catch(() => undefined);
         throw e;
       }
     },
     [getClient],
+  );
+
+  const retryWithManualKey = useCallback(
+    async (key: string) => {
+      const target = lastAttemptRef.current;
+      if (!target) {
+        setError('没有可重连的设备，请先扫描并连接一次。');
+        return;
+      }
+      await connectAndPair(target.id, target.name, key);
+    },
+    [connectAndPair],
   );
 
   // 强制清除配对：连上后发 BLE&RESET（恢复出厂：重置密钥 + 格式化磁盘）。
@@ -1999,6 +2034,7 @@ export function Mr20Provider({children}: {children: React.ReactNode}) {
     startScan,
     stopScan,
     connectAndPair,
+    retryWithManualKey,
     cancelNewDevicePairing,
     issueBackendKey,
     reconnectSaved,
