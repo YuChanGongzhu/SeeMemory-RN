@@ -1,19 +1,25 @@
 /**
- * 引导步骤的可视化渲染：镂空高亮 + 气泡；目标当前没在屏幕可见范围内注册
- * （子页还没切过去、或被滚动到看不见）时退化成右上角浮动提示卡，不强行滚动
- * 或跳转，等用户自己走到那一步再切回真高亮。
+ * 覆盖「root」/「drawer」两类挂点的引导可视化：镂空高亮 + 气泡；目标当前没在
+ * 屏幕可见范围内注册（子页还没切过去、或被滚动到看不见）时退化成右上角浮动
+ * 提示卡，不强行滚动或跳转，等用户自己走到那一步再切回真高亮。
  *
  * 要挂两处：App 根部（mount="root"）覆盖普通页面；AppDrawer 的 Modal 内部
  * （mount="drawer"）覆盖侧边栏——RN 的 Modal 是独立原生层，根部这层普通的
  * 绝对定位 View 盖不上去，只能在 Modal 内容里单独再挂一份。
+ *
+ * mount="more"（BottomSheet「更多」弹层）不用这层——弹层贴底、高度跟内容走，
+ * `measureInWindow` 量出来的屏幕绝对坐标跟这几层的坐标系对不上，试过几版时间
+ * 兜底方案都没能稳定复现正确位置，改成在 TourTarget 里本地渲染（见
+ * TourTarget.tsx），不跨 Modal 边界测量。
  */
 import React, {useEffect} from 'react';
 import {Dimensions, Pressable, StyleSheet, Text, View} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Animated, {useAnimatedStyle, useSharedValue, withTiming} from 'react-native-reanimated';
 import Svg, {Defs, Mask, Rect} from 'react-native-svg';
-import {colors, radius, space, type as T} from '../design/tokens';
+import {colors, radius, space} from '../design/tokens';
 import {useTour} from './TourContext';
+import {TourBubble} from './TourBubble';
 import type {StepMount} from './steps';
 
 const PAD = 8;
@@ -40,14 +46,6 @@ export function TourSpotlight({mount}: {mount: StepMount}) {
   const rawRect = currentStep.targetId ? getTargetRect(currentStep.targetId) : undefined;
   const onScreen = !!rawRect && rawRect.y + rawRect.height > EDGE_MARGIN && rawRect.y < screenH - EDGE_MARGIN;
 
-  // 「跳过」永远都在，任何一步卡住都能手动往下走——只前进一步，不结束整个
-  // 引导（advance 走到最后一步自然会收尾）。
-  // 主按钮只在两种情况额外出现：info 步骤自带的「下一步」/「完成引导」，或者
-  // 标了 manualCompleteLabel 的步骤（目前是 record-audio/check-ota——设备物理
-  // 操作或第三方状态，App 里没有对应可点目标 / 检测不到）。其它 tap/wait 步骤
-  // 不给这个主按钮：tap 步骤本来就该点真实按钮，其它 wait 步骤都紧跟着 App 内
-  // 操作，给了手动完成反而怂恿用户跳过真正该做的事——但「跳过」这个次要出口
-  // 还是留着。
   const ctaLabel = currentStep.kind === 'info' ? (currentStep.ctaLabel ?? '下一步') : currentStep.manualCompleteLabel;
   const showCta = !!ctaLabel;
   const handleCta = () => (currentStep.isFinal ? finish() : advance());
@@ -103,20 +101,12 @@ export function TourSpotlight({mount}: {mount: StepMount}) {
         </Svg>
         <View style={[styles.ring, {left: hx, top: hy, width: hw, height: hh}]} />
       </View>
-      <View style={[styles.bubble, {width: bubbleW, left: bubbleLeft, top: bubbleTop, bottom: bubbleBottom}]}>
-        <Text style={styles.bubbleTitle}>{currentStep.title}</Text>
-        <Text style={styles.bubbleBody}>{currentStep.body}</Text>
-        <View style={styles.bubbleFooter}>
-          <Pressable onPress={handleSkip} hitSlop={8}>
-            <Text style={styles.skipLink}>跳过</Text>
-          </Pressable>
-          {showCta ? (
-            <Pressable onPress={handleCta} style={styles.ctaBtn} hitSlop={8}>
-              <Text style={styles.ctaText}>{ctaLabel}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      </View>
+      <TourBubble
+        step={currentStep}
+        onSkip={handleSkip}
+        onCta={handleCta}
+        style={{position: 'absolute', width: bubbleW, left: bubbleLeft, top: bubbleTop, bottom: bubbleBottom}}
+      />
     </Animated.View>
   );
 }
@@ -128,33 +118,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
-  bubble: {
-    position: 'absolute',
-    backgroundColor: colors.bg,
-    borderRadius: radius.lg,
-    padding: space.lg,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 8},
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    elevation: 8,
-  },
-  bubbleTitle: {...T.sysTitle, color: colors.textMain, marginBottom: 4},
-  bubbleBody: {...T.sysBody, color: colors.textSub},
-  bubbleFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: space.md,
-  },
-  skipLink: {fontSize: 13, color: colors.textSub, fontWeight: '500'},
-  ctaBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.pill,
-    paddingVertical: 8,
-    paddingHorizontal: space.lg,
-  },
-  ctaText: {fontSize: 14, fontWeight: '600', color: '#fff'},
   fallbackWrap: {
     position: 'absolute',
     left: space.page,
