@@ -2,7 +2,7 @@ import React, {useEffect, useState, type ReactNode} from 'react';
 import {Platform} from 'react-native';
 
 import {checkAppVersion, type AppVersionCheckResult} from '../apis/requests/appVersion';
-import {APP_VERSION_CODE} from '../config/appVersion';
+import {getAppVersionCode} from '../config/appVersion';
 import {getDismissedUpdateVersion, saveDismissedUpdateVersion} from '../services/storage';
 import {ForceUpdateScreen} from './ForceUpdateScreen';
 import {SoftUpdatePrompt} from './SoftUpdatePrompt';
@@ -18,8 +18,13 @@ export function AppVersionGate({children}: {children: ReactNode}) {
   useEffect(() => {
     let cancelled = false;
     const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+    const versionCode = getAppVersionCode();
+    if (versionCode == null) {
+      // 读不到真实版本码：不能当 0 用（会被误判成最旧版本触发强更），直接跳过本次检查
+      return;
+    }
 
-    checkAppVersion(platform, APP_VERSION_CODE)
+    checkAppVersion(platform, versionCode)
       .then(async res => {
         if (cancelled) {
           return;

@@ -2577,6 +2577,8 @@ PODS:
     - CocoaLumberjack/Swift
   - RGCxrClient (1.0.1):
     - RGCoreKit (= 0.0.2)
+  - RNDeviceInfo (12.1.0):
+    - React-Core
   - RNReanimated (4.4.1):
     - boost
     - DoubleConversion
@@ -2968,6 +2970,7 @@ DEPENDENCIES:
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - RGCoreKit
   - RGCxrClient
+  - RNDeviceInfo (from `../node_modules/react-native-device-info`)
   - RNReanimated (from `../node_modules/react-native-reanimated`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNSVG (from `../node_modules/react-native-svg`)
@@ -3143,6 +3146,8 @@ EXTERNAL SOURCES:
     :path: build/generated/ios/ReactCodegen
   ReactCommon:
     :path: "../node_modules/react-native/ReactCommon"
+  RNDeviceInfo:
+    :path: "../node_modules/react-native-device-info"
   RNReanimated:
     :path: "../node_modules/react-native-reanimated"
   RNScreens:
@@ -3241,6 +3246,7 @@ SPEC CHECKSUMS:
   ReactCommon: 9351bfe9ce10e0ff26817189da9f8b613437f3df
   RGCoreKit: 28a9f67424abfefedf55578a3473d84b48119ab2
   RGCxrClient: 9e83eb546697ea018e2066858e6b1504ea973d4a
+  RNDeviceInfo: 723e97dd98af9b7913477e7a40252c15517c258c
   RNReanimated: 256489c591f96e42aa80460de7169e1d0ff633dc
   RNScreens: e902eba58a27d3ad399a495d578e8aba3ea0f490
   RNSVG: a14f58a6be359fd52b3d6eef86c1a6461264dd78
