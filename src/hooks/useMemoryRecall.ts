@@ -13,7 +13,8 @@ export interface UploadDebugData {
   duration?: number;
   timestamp?: number;
   fileExtension?: string;
-  scene?: number;
+  /** 上传场景（后端 FileUploadEnum 常量名） */
+  type?: string;
 }
 
 export interface UploadDebugResponse {

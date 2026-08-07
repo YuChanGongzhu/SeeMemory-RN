@@ -18,12 +18,22 @@ interface PresignedUrlApiResponse {
   data: PresignedUrlPayload;
 }
 
+/** 上传场景 → 后端 FileUploadEnum 常量名（即 COS 对象键前缀）；新增场景需通知后端在 FileUploadEnum 登记 */
+export const PresignedUrlType = {
+  /** 音频文件 */
+  Audio: 'AUDIO',
+  /** 记忆图片（后端沿用历史拼写 MEMERY_IMAGE，历史对象已落在该前缀下） */
+  MemoryImage: 'MEMERY_IMAGE',
+} as const;
+
+export type PresignedUrlType = (typeof PresignedUrlType)[keyof typeof PresignedUrlType];
+
 interface UploadFileOptions {
   token?: string;
   filePath: string;
   fileExtension?: string;
   contentType: string;
-  scene: number;
+  type: PresignedUrlType;
   extra?: Record<string, unknown>;
 }
 
@@ -34,7 +44,7 @@ interface UploadFileResult {
     objectUrl: string;
     presignedUrl: string;
     fileExtension: string;
-    scene: number;
+    type: PresignedUrlType;
   } & Record<string, unknown>;
 }
 
@@ -147,20 +157,20 @@ function getAsrErrorMessage(payload: AsrResponse | {raw: string}): string {
 
 export async function getPresignedUrl(
   fileExtension: string,
-  scene: number,
+  type: PresignedUrlType,
 ): Promise<PresignedUrlApiResponse> {
   assertAiConsentGranted();
   // 与 see-mem-studio-web 一致：走 manager-api 通用预签名接口
-  //   GET https://ms.seemem.com/api/common/getPresignedUrl?fileExtension=&scene=
+  //   GET https://ms.seemem.com/api/common/getPresignedUrl?fileExtension=&type=
   // 用登录态 auth_token (Bearer) 鉴权，返回 {code,msg,data:{presignedUrl,objectUrl}} 信封。
   // （旧实现打的是 seemem.com/api/v1/memory/getPresignedUrl，那是另一套鉴权，
-  //   会返回「authorization 无效」。scene 必须是后端 FileUploadEnum 的合法值。）
+  //   会返回「authorization 无效」。type 必须是后端 FileUploadEnum 的常量名。）
   let data: PresignedUrlPayload;
   try {
     data = await baseRequest<PresignedUrlPayload>({
       method: 'GET',
       path: '/common/getPresignedUrl',
-      query: {fileExtension, scene},
+      query: {fileExtension, type},
     });
   } catch (e) {
     // 区分「拿预签名就失败」（连不上 ms.seemem.com / 登录态失效）和「传 COS 失败」。
@@ -225,12 +235,12 @@ export async function uploadFileToCos({
   filePath,
   fileExtension,
   contentType,
-  scene,
+  type,
   extra,
 }: UploadFileOptions): Promise<UploadFileResult> {
   assertAiConsentGranted();
   const resolvedExtension = (fileExtension || getFileExtension(filePath)).toLowerCase();
-  const presignedResult = await getPresignedUrl(resolvedExtension, scene);
+  const presignedResult = await getPresignedUrl(resolvedExtension, type);
   const {presignedUrl, objectUrl} = presignedResult.data;
   await putFileToPresignedUrl(presignedUrl, filePath, contentType);
 
@@ -241,7 +251,7 @@ export async function uploadFileToCos({
       objectUrl,
       presignedUrl,
       fileExtension: resolvedExtension,
-      scene,
+      type,
       ...(extra || {}),
     },
   };
@@ -254,14 +264,13 @@ export async function uploadAudioSegment(
   timestamp: number
 ): Promise<UploadResponse> {
   const fileExtension = getFileExtension(filePath);
-  const scene = 4;
   const contentType = `audio/${fileExtension}`;
   return uploadFileToCos({
     token,
     filePath,
     fileExtension,
     contentType,
-    scene,
+    type: PresignedUrlType.Audio,
     extra: {
       duration,
       timestamp,
@@ -330,7 +339,6 @@ export async function uploadImageFile(
   mimeType?: string,
 ): Promise<UploadResponse> {
   const fileExtension = getFileExtension(filePath);
-  const scene = 7; // FileUploadEnum.MEMERY_IMAGE（记忆图片）
   const normalizedMimeType =
     mimeType?.trim() || (fileExtension === 'jpg' ? 'image/jpeg' : `image/${fileExtension}`);
 
@@ -339,7 +347,7 @@ export async function uploadImageFile(
     filePath,
     fileExtension,
     contentType: normalizedMimeType,
-    scene,
+    type: PresignedUrlType.MemoryImage,
     extra: {
       mimeType: normalizedMimeType,
     },
