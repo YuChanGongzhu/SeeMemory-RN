@@ -21,7 +21,7 @@ jest.mock('react-native-sse', () => ({
 }));
 
 import {baseRequest} from '../src/apis/core/request';
-import {getPresignedUrl} from '../src/services/api';
+import {getPresignedUrl, PresignedUrlType} from '../src/services/api';
 import {transcribeVoice} from '../src/apis/requests/audioTranscribe';
 import {saveMemory} from '../src/apis/requests/memory';
 import {createMemorySummary} from '../src/apis/requests/summaries';
@@ -42,7 +42,7 @@ describe('protected service boundaries', () => {
   afterAll(() => setAiConsentGranted(false));
 
   test('blocks cloud upload before requesting a presigned URL', async () => {
-    await expect(getPresignedUrl('mp3', 4)).rejects.toBeInstanceOf(
+    await expect(getPresignedUrl('mp3', PresignedUrlType.Audio)).rejects.toBeInstanceOf(
       AiConsentRequiredError,
     );
     expect(mockBaseRequest).not.toHaveBeenCalled();
